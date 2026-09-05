@@ -1,35 +1,1239 @@
 'use client';
 
-// Main entry point for the capacity assessment app
-// In production, this reads launch params (JWT, participant ID, assessment number, phase)
-// from URL search params or postMessage (if iframe-embedded)
+// ===== CAPACITY ASSESSMENT =====
+// Single-page guided assessment. No navigation, no tabs, no report views.
+// The participant opens this and walks it start to finish:
+//   connect -> checklist -> resting intro -> resting (5 min)
+//   -> resting done -> rf intro -> rf (6 rates x 2 min) -> rf done -> complete
 //
-// The full assessment component will be built here with Claude Code
-// using the lib modules (bluetooth, hrv-metrics, audio, supabase)
+// Launch params (URL): ?token=<supabase jwt>&name=<participant>&assessment=<n>
+// Dev flag: ?fast=1 shortens every recording segment so the flow can be walked in ~2 min.
+
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  CartesianGrid,
+  Line,
+  LineChart,
+  ReferenceLine,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from 'recharts';
+
+import { connectHW9, connectSimulated, isBLESupported, type HRDataPoint } from '@/lib/bluetooth';
+import { computeAllMetrics, type HRVMetrics } from '@/lib/hrv-metrics';
+import { bell, cancelSpeech, doubleBell, speak } from '@/lib/audio';
+import { createSupabaseClient, getParticipant } from '@/lib/supabase';
+
+// ===== BRAND =====
+const C = {
+  blue: '#386797',
+  indigo: '#324C66',
+  charcoal: '#393939',
+  mist: '#E9EDF0',
+  pale: '#F0F4F8',
+  green: '#4A9B7F',
+  amber: '#D4A843',
+  red: '#C0625A',
+};
+
+// ===== PROTOCOL =====
+const RESTING_MS = 5 * 60 * 1000;
+const RF_SEGMENT_MS = 2 * 60 * 1000;
+const RF_RATES = [4.5, 5.0, 5.5, 6.0, 6.5, 7.0];
+
+const PLATFORM_URL = process.env.NEXT_PUBLIC_PLATFORM_URL || 'https://university.neuroprogeny.com';
+const COACHING_URL = process.env.NEXT_PUBLIC_COACHING_URL || 'https://neuroprogeny.com/coaching';
+const PROMO_CODE = 'CAPACITY';
+
+type Phase =
+  | 'connect'
+  | 'checklist'
+  | 'resting-intro'
+  | 'resting'
+  | 'resting-done'
+  | 'rf-intro'
+  | 'rf'
+  | 'rf-done'
+  | 'complete';
+
+const ACTIVE_PHASES: Phase[] = [
+  'checklist',
+  'resting-intro',
+  'resting',
+  'resting-done',
+  'rf-intro',
+  'rf',
+  'rf-done',
+];
+
+interface RFSegment {
+  rate: number;
+  metrics: HRVMetrics | null;
+  rrCount: number;
+}
+
+// ===== CAPACITY FRAMING =====
+// Levels describe how the nervous system is currently allocating its resources.
+// They are never a judgement and never a diagnosis.
+interface CapacityLevel {
+  key: string;
+  label: string;
+  color: string;
+  description: string;
+}
+
+function capacityLevel(rmssd: number): CapacityLevel {
+  if (rmssd >= 50) {
+    return {
+      key: 'expanded',
+      label: 'Expanded Capacity',
+      color: C.green,
+      description:
+        'Your system is running with resources to spare. Recovery, digestion and connection are all well funded right now — the signature of a nervous system that is not spending heavily on defence. This is a good window for challenge, learning and growth.',
+    };
+  }
+  if (rmssd >= 30) {
+    return {
+      key: 'building',
+      label: 'Building Capacity',
+      color: C.blue,
+      description:
+        'Your system is investing in recovery while still holding a reserve back. Everyday demand is being met and capacity is being rebuilt in the background. This is an adaptive, forward-moving allocation — the reserve grows each time recovery gets funded.',
+    };
+  }
+  if (rmssd >= 15) {
+    return {
+      key: 'conserving',
+      label: 'Conserving Resources',
+      color: C.amber,
+      description:
+        'Your system has decided that resources are better held than spent. This is an intelligent allocation, not a fault — it protects you when demand has been sustained or recovery has been short. Capacity returns as your system reads the environment as safe enough to reinvest.',
+    };
+  }
+  return {
+    key: 'high-conservation',
+    label: 'High Conservation',
+    color: C.red,
+    description:
+      'Your system is holding its resources close. This is a deeply protective allocation that prioritises immediate readiness over long-range recovery. It reflects the load your system is carrying, not a limitation in you. Capacity is built back by lowering demand and making recovery reliably available.',
+  };
+}
+
+// Recovery Index: a 0-100 presentation of RMSSD, anchored to the capacity thresholds
+// so the index and the level can never tell the participant two different stories.
+function recoveryIndex(rmssd: number): number {
+  const anchors: [number, number][] = [
+    [0, 0],
+    [15, 35],
+    [30, 60],
+    [50, 80],
+    [100, 100],
+  ];
+  if (rmssd <= 0) return 0;
+  if (rmssd >= 100) return 100;
+  for (let i = 1; i < anchors.length; i++) {
+    const [x1, y1] = anchors[i - 1];
+    const [x2, y2] = anchors[i];
+    if (rmssd <= x2) return Math.round(y1 + ((rmssd - x1) / (x2 - x1)) * (y2 - y1));
+  }
+  return 100;
+}
+
+// Resonance frequency = the paced rate at which the system produced the largest,
+// most rhythmic cardiac oscillation. Amplitude (SDNN) leads; beat-to-beat change
+// (RMSSD) and rhythm alignment (coherence) confirm it.
+function pickResonance(segments: RFSegment[]): { rate: number; scores: number[] } {
+  const valid = segments.filter((s) => s.metrics);
+  if (!valid.length) return { rate: 5.5, scores: segments.map(() => 0) };
+
+  const maxOf = (pick: (m: HRVMetrics) => number) =>
+    Math.max(...valid.map((s) => pick(s.metrics as HRVMetrics)), 0.0001);
+
+  const maxSdnn = maxOf((m) => m.sdnn);
+  const maxRmssd = maxOf((m) => m.rmssd);
+  const maxCoh = maxOf((m) => m.coherence);
+
+  const scores = segments.map((s) =>
+    s.metrics
+      ? 0.4 * (s.metrics.sdnn / maxSdnn) +
+        0.3 * (s.metrics.rmssd / maxRmssd) +
+        0.3 * (s.metrics.coherence / maxCoh)
+      : 0
+  );
+
+  let best = 0;
+  scores.forEach((v, i) => {
+    if (v > scores[best]) best = i;
+  });
+  return { rate: segments[best].rate, scores };
+}
+
+function formatTime(ms: number): string {
+  const total = Math.max(0, Math.ceil(ms / 1000));
+  const m = Math.floor(total / 60);
+  const s = total % 60;
+  return `${m}:${String(s).padStart(2, '0')}`;
+}
+
+// ===== SMALL PIECES =====
+
+function Check() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={C.green} strokeWidth="3">
+      <polyline points="20 6 9 17 4 12" />
+    </svg>
+  );
+}
+
+function PulseDot({ hr }: { hr: number }) {
+  const duration = hr > 30 ? 60 / hr : 1;
+  return (
+    <span
+      className="inline-block rounded-full"
+      style={{
+        width: 10,
+        height: 10,
+        background: C.blue,
+        animation: `pulse-dot ${duration}s ease-in-out infinite`,
+      }}
+      aria-hidden
+    />
+  );
+}
+
+function RRTrace({ data }: { data: number[] }) {
+  if (data.length < 4) return <div style={{ height: 44 }} />;
+  const w = 280;
+  const h = 44;
+  const min = Math.min(...data);
+  const max = Math.max(...data);
+  const range = Math.max(max - min, 1);
+  const pts = data
+    .map((v, i) => `${(i / (data.length - 1)) * w},${h - ((v - min) / range) * (h - 6) - 3}`)
+    .join(' ');
+  return (
+    <svg
+      width={w}
+      height={h}
+      viewBox={`0 0 ${w} ${h}`}
+      className="w-full max-w-xs mx-auto"
+      style={{ opacity: 0.28 }}
+      aria-hidden
+    >
+      <polyline points={pts} fill="none" stroke={C.blue} strokeWidth="1.5" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function BreathPacer({ rate }: { rate: number }) {
+  const [frac, setFrac] = useState(0);
+
+  useEffect(() => {
+    const start = performance.now();
+    const period = (60 / rate) * 1000;
+    let raf = 0;
+    const loop = (t: number) => {
+      setFrac(((t - start) % period) / period);
+      raf = requestAnimationFrame(loop);
+    };
+    raf = requestAnimationFrame(loop);
+    return () => cancelAnimationFrame(raf);
+  }, [rate]);
+
+  // Sinusoidal breath: 0 at the bottom of the exhale, 1 at the top of the inhale.
+  const amp = (1 - Math.cos(2 * Math.PI * frac)) / 2;
+  const scale = 0.4 + amp * 0.6;
+  const inhaling = frac < 0.5;
+
+  return (
+    <div className="relative flex items-center justify-center" style={{ width: 260, height: 260 }}>
+      <div
+        className="absolute rounded-full"
+        style={{ width: 258, height: 258, border: `1px solid ${C.mist}` }}
+      />
+      <div
+        className="absolute rounded-full"
+        style={{
+          width: 240,
+          height: 240,
+          transform: `scale(${scale})`,
+          background: `radial-gradient(circle, ${C.blue}22 0%, ${C.blue}0d 70%, transparent 100%)`,
+          border: `2px solid ${C.blue}`,
+          opacity: 0.35 + amp * 0.5,
+          willChange: 'transform',
+        }}
+      />
+      <div
+        className="relative text-sm tracking-[0.28em] uppercase font-medium"
+        style={{ color: C.indigo, opacity: 0.85 }}
+      >
+        {inhaling ? 'Inhale' : 'Exhale'}
+      </div>
+    </div>
+  );
+}
+
+function MetricCard({
+  label,
+  value,
+  unit,
+  note,
+  accent,
+}: {
+  label: string;
+  value: string;
+  unit?: string;
+  note: string;
+  accent?: string;
+}) {
+  return (
+    <div className="rounded-xl bg-white p-5 border" style={{ borderColor: C.mist }}>
+      <div className="text-[11px] uppercase tracking-[0.14em] font-medium" style={{ color: C.blue }}>
+        {label}
+      </div>
+      <div className="mt-2 flex items-baseline gap-1">
+        <span className="text-3xl font-semibold" style={{ color: accent || C.indigo }}>
+          {value}
+        </span>
+        {unit ? (
+          <span className="text-xs font-medium" style={{ color: C.charcoal, opacity: 0.5 }}>
+            {unit}
+          </span>
+        ) : null}
+      </div>
+      <p className="mt-2 text-xs leading-relaxed" style={{ color: C.charcoal, opacity: 0.62 }}>
+        {note}
+      </p>
+    </div>
+  );
+}
+
+function PrimaryButton({
+  children,
+  onClick,
+  disabled,
+}: {
+  children: React.ReactNode;
+  onClick?: () => void;
+  disabled?: boolean;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      className="w-full rounded-xl px-6 py-4 text-white text-sm font-semibold tracking-wide transition-opacity disabled:opacity-40"
+      style={{ background: C.blue }}
+    >
+      {children}
+    </button>
+  );
+}
+
+function Panel({ children }: { children: React.ReactNode }) {
+  return (
+    <div
+      className="w-full max-w-md mx-auto rounded-2xl bg-white p-8 border"
+      style={{ borderColor: C.mist, animation: 'fade-in 0.5s ease-out' }}
+    >
+      {children}
+    </div>
+  );
+}
+
+const CHECKLIST: [string, string][] = [
+  ['No caffeine in the last 2 hours', 'Caffeine lifts heart rate and flattens variability'],
+  ['No food in the last 2 hours', 'Digestion draws on the same resources we are measuring'],
+  ['No hard exercise in the last 24 hours', 'Recovery from training masks your baseline'],
+  ['Seated upright, feet flat, back supported', 'Posture shifts the signal more than anything else'],
+];
+
+// ===== MAIN =====
 
 export default function AssessmentPage() {
+  const [phase, setPhase] = useState<Phase>('connect');
+  const [name, setName] = useState('');
+  const [accessToken, setAccessToken] = useState<string | null>(null);
+  const [participantId, setParticipantId] = useState<string | null>(null);
+  const [assessmentNumber, setAssessmentNumber] = useState(1);
+  const [fastMode, setFastMode] = useState(false);
+
+  // Device
+  const [connState, setConnState] = useState<'idle' | 'connecting' | 'connected'>('idle');
+  const [connMode, setConnMode] = useState<'ble' | 'sim' | null>(null);
+  const [connError, setConnError] = useState<string | null>(null);
+  const [deviceLost, setDeviceLost] = useState(false);
+  const [bleSupported, setBleSupported] = useState(false);
+  const disconnectRef = useRef<(() => void) | null>(null);
+
+  // Live signal
+  const [hr, setHr] = useState(0);
+  const [trace, setTrace] = useState<number[]>([]);
+  const collectorRef = useRef<number[] | null>(null);
+  const restingRRRef = useRef<number[]>([]);
+  const rfRRRef = useRef<number[][]>(RF_RATES.map(() => []));
+
+  // Checklist
+  const [checks, setChecks] = useState<boolean[]>([false, false, false, false]);
+
+  // Segment clock
+  const segStartRef = useRef(0);
+  const segDoneRef = useRef(false);
+  const [elapsed, setElapsed] = useState(0);
+
+  // Results
+  const [restingMetrics, setRestingMetrics] = useState<HRVMetrics | null>(null);
+  const [rfSegments, setRfSegments] = useState<RFSegment[]>([]);
+  const [rfIndex, setRfIndex] = useState(0);
+
+  // Save
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+
+  // Abort
+  const [confirmAbort, setConfirmAbort] = useState(false);
+
+  const restingMs = fastMode ? 25_000 : RESTING_MS;
+  const rfSegmentMs = fastMode ? 15_000 : RF_SEGMENT_MS;
+
+  // ----- launch params -----
+  useEffect(() => {
+    setBleSupported(isBLESupported());
+    const params = new URLSearchParams(window.location.search);
+    const token = params.get('token') || params.get('jwt');
+    const nameParam = params.get('name');
+    const n = Number(params.get('assessment'));
+
+    if (nameParam) setName(nameParam);
+    if (Number.isFinite(n) && n > 0) setAssessmentNumber(n);
+    if (params.get('fast') === '1') setFastMode(true);
+    if (!token) return;
+
+    setAccessToken(token);
+    // The participant is already authenticated on the NPU platform; their JWT rides in.
+    (async () => {
+      try {
+        const client = createSupabaseClient(token);
+        const p = await getParticipant(client);
+        if (p) {
+          setParticipantId(p.id);
+          setName((prev) => prev || p.name);
+        }
+      } catch {
+        // Falls back to the manual name field.
+      }
+    })();
+  }, []);
+
+  // ----- teardown -----
+  useEffect(
+    () => () => {
+      cancelSpeech();
+      disconnectRef.current?.();
+    },
+    []
+  );
+
+  // ----- streaming -----
+  const handleData = useCallback((d: HRDataPoint) => {
+    if (d.heartRate > 0) setHr(d.heartRate);
+    if (d.rrIntervals.length) {
+      if (collectorRef.current) collectorRef.current.push(...d.rrIntervals);
+      setTrace((prev) => [...prev, ...d.rrIntervals].slice(-80));
+    }
+  }, []);
+
+  const handleDisconnect = useCallback(() => {
+    disconnectRef.current = null;
+    setConnState('idle');
+    setConnMode(null);
+    setDeviceLost(true);
+  }, []);
+
+  const connectDevice = useCallback(
+    async (mode: 'ble' | 'sim') => {
+      setConnError(null);
+      setDeviceLost(false);
+      setConnState('connecting');
+      try {
+        const stop =
+          mode === 'ble'
+            ? await connectHW9(handleData, handleDisconnect)
+            : connectSimulated(handleData, handleDisconnect);
+        disconnectRef.current = stop;
+        setConnMode(mode);
+        setConnState('connected');
+      } catch (e: any) {
+        setConnState('idle');
+        setConnError(
+          e?.name === 'NotFoundError'
+            ? 'No armband was selected. Try again, or use simulation to walk through the assessment.'
+            : e?.message || 'Could not connect to the armband.'
+        );
+      }
+    },
+    [handleData, handleDisconnect]
+  );
+
+  // ===== PHASE TRANSITIONS =====
+
+  const startResting = useCallback(() => {
+    restingRRRef.current = [];
+    collectorRef.current = restingRRRef.current;
+    segStartRef.current = Date.now();
+    segDoneRef.current = false;
+    setElapsed(0);
+    setPhase('resting');
+    bell();
+    speak('Close your eyes and breathe naturally. Recording begins now.');
+  }, []);
+
+  const finishResting = useCallback(() => {
+    collectorRef.current = null;
+    setRestingMetrics(computeAllMetrics(restingRRRef.current));
+    setPhase('resting-done');
+    doubleBell();
+    speak('Recording complete. You may open your eyes.');
+  }, []);
+
+  const startRFSegment = useCallback((index: number) => {
+    rfRRRef.current[index] = [];
+    collectorRef.current = rfRRRef.current[index];
+    segStartRef.current = Date.now();
+    segDoneRef.current = false;
+    setElapsed(0);
+    setRfIndex(index);
+    setPhase('rf');
+    bell();
+    speak(
+      `Breathe at ${RF_RATES[index].toFixed(1)} breaths per minute. Follow the circle. Inhale as it grows, exhale as it settles.`
+    );
+  }, []);
+
+  const startRF = useCallback(() => {
+    rfRRRef.current = RF_RATES.map(() => []);
+    setRfSegments([]);
+    startRFSegment(0);
+  }, [startRFSegment]);
+
+  const finishRFSegment = useCallback(() => {
+    const index = rfIndex;
+    const rr = rfRRRef.current[index];
+    setRfSegments((prev) => [
+      ...prev,
+      { rate: RF_RATES[index], metrics: computeAllMetrics(rr), rrCount: rr.length },
+    ]);
+
+    if (index < RF_RATES.length - 1) {
+      startRFSegment(index + 1);
+    } else {
+      collectorRef.current = null;
+      setPhase('rf-done');
+      doubleBell();
+      speak('Breathing assessment complete. Well done.');
+    }
+  }, [rfIndex, startRFSegment]);
+
+  // ----- segment clock -----
+  useEffect(() => {
+    if (phase !== 'resting' && phase !== 'rf') return;
+    const duration = phase === 'resting' ? restingMs : rfSegmentMs;
+    const id = setInterval(() => {
+      const e = Date.now() - segStartRef.current;
+      setElapsed(Math.min(e, duration));
+      if (e >= duration && !segDoneRef.current) {
+        segDoneRef.current = true;
+        if (phase === 'resting') finishResting();
+        else finishRFSegment();
+      }
+    }, 200);
+    return () => clearInterval(id);
+  }, [phase, rfIndex, restingMs, rfSegmentMs, finishResting, finishRFSegment]);
+
+  // ===== ABORT / RESTART =====
+  const abort = useCallback(() => {
+    cancelSpeech();
+    collectorRef.current = null;
+    restingRRRef.current = [];
+    rfRRRef.current = RF_RATES.map(() => []);
+    segDoneRef.current = true;
+    setConfirmAbort(false);
+    setElapsed(0);
+    setChecks([false, false, false, false]);
+    setRestingMetrics(null);
+    setRfSegments([]);
+    setRfIndex(0);
+    setTrace([]);
+    setSaveError(null);
+    setPhase('connect');
+  }, []);
+
+  // ===== RESULTS =====
+  const resonance = useMemo(() => pickResonance(rfSegments), [rfSegments]);
+  const level = useMemo(() => capacityLevel(restingMetrics?.rmssd ?? 0), [restingMetrics]);
+  const recovery = useMemo(() => recoveryIndex(restingMetrics?.rmssd ?? 0), [restingMetrics]);
+
+  const chartData = useMemo(
+    () =>
+      rfSegments.map((s, i) => ({
+        rate: s.rate,
+        sdnn: s.metrics ? Math.round(s.metrics.sdnn) : 0,
+        rmssd: s.metrics ? Math.round(s.metrics.rmssd) : 0,
+        coherence: s.metrics ? s.metrics.coherence : 0,
+        score: Math.round((resonance.scores[i] ?? 0) * 100),
+      })),
+    [rfSegments, resonance]
+  );
+
+  // ===== FINALIZE =====
+  const finalize = useCallback(async () => {
+    setSaving(true);
+    setSaveError(null);
+
+    const payload = {
+      participant_id: participantId,
+      participant_name: name.trim() || 'Participant',
+      assessment_number: assessmentNumber,
+      recorded_at: new Date().toISOString(),
+      device_mode: connMode,
+      simulated: connMode === 'sim',
+
+      // Resting block
+      resting_metrics: restingMetrics,
+      resting_rr_intervals: restingRRRef.current,
+      resting_duration_ms: restingMs,
+
+      // Resonance frequency block
+      rf_segments: rfSegments.map((s, i) => ({
+        rate: s.rate,
+        rr_count: s.rrCount,
+        metrics: s.metrics,
+        resonance_score: Math.round((resonance.scores[i] ?? 0) * 1000) / 1000,
+      })),
+      rf_segment_duration_ms: rfSegmentMs,
+      resonance_frequency: resonance.rate,
+
+      // Headline summary
+      recovery_index: recovery,
+      capacity_level: level.key,
+      capacity_label: level.label,
+      heart_rate: restingMetrics?.meanHR ?? null,
+      breath_rate: restingMetrics?.breathRate ?? null,
+      coherence: restingMetrics?.coherence ?? null,
+      complexity: restingMetrics?.sampEn ?? null,
+    };
+
+    try {
+      // TODO: the nr_assessment_results migration has not been run yet.
+      // Once the table exists, enable the write below and drop the console log.
+      //
+      // const client = createSupabaseClient(accessToken ?? undefined);
+      // const { error } = await client.from('nr_assessment_results').insert(payload);
+      // if (error) throw error;
+
+      // eslint-disable-next-line no-console
+      console.log('[capacity-assessment] nr_assessment_results payload', payload);
+      await new Promise((r) => setTimeout(r, 600));
+
+      // Nothing left to record — release the armband and its wake lock.
+      disconnectRef.current?.();
+      disconnectRef.current = null;
+      setConnState('idle');
+      setPhase('complete');
+    } catch (e: any) {
+      setSaveError(e?.message || 'Could not save your results. Your assessment is still on screen.');
+    } finally {
+      setSaving(false);
+    }
+  }, [
+    participantId,
+    name,
+    assessmentNumber,
+    connMode,
+    restingMetrics,
+    restingMs,
+    rfSegments,
+    rfSegmentMs,
+    resonance,
+    recovery,
+    level,
+  ]);
+
+  // ===== RENDER =====
+  const showAbort = ACTIVE_PHASES.includes(phase);
+  const canStart = name.trim().length > 0 && connState === 'connected';
+  const allChecked = checks.every(Boolean);
+
   return (
-    <div className="min-h-screen bg-pale-blue flex items-center justify-center">
-      <div className="text-center max-w-md px-6">
-        <div className="w-20 h-20 rounded-full bg-neuro-blue/10 flex items-center justify-center mx-auto mb-6">
-          <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="#386797" strokeWidth="2">
-            <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/>
-          </svg>
+    <div className="min-h-screen" style={{ background: C.pale, color: C.charcoal }}>
+      {/* ===== HEADER ===== */}
+      <header
+        className="sticky top-0 z-20 border-b backdrop-blur"
+        style={{ borderColor: C.mist, background: 'rgba(240,244,248,0.86)' }}
+      >
+        <div className="max-w-3xl mx-auto px-5 h-14 flex items-center justify-between">
+          <div className="flex items-center gap-2.5">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={C.blue} strokeWidth="2">
+              <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z" />
+            </svg>
+            <span className="text-sm font-semibold" style={{ color: C.indigo }}>
+              Capacity Assessment
+            </span>
+          </div>
+
+          <div className="flex items-center gap-4">
+            {connState === 'connected' && hr > 0 && phase !== 'connect' ? (
+              <span className="flex items-center gap-2 text-xs" style={{ opacity: 0.6 }}>
+                <PulseDot hr={hr} />
+                {hr} bpm
+              </span>
+            ) : null}
+            {showAbort ? (
+              <button
+                onClick={() => setConfirmAbort(true)}
+                className="text-xs font-medium px-3 py-1.5 rounded-lg border"
+                style={{ borderColor: C.mist, color: C.charcoal, opacity: 0.75 }}
+              >
+                Start over
+              </button>
+            ) : null}
+          </div>
         </div>
-        <h1 className="text-2xl font-bold text-aurora-indigo mb-3">Capacity Assessment</h1>
-        <p className="text-gray-500 text-sm mb-8">
-          Scaffold deployed. Assessment component will be built with Claude Code
-          using the lib modules in this project.
-        </p>
-        <div className="text-xs text-gray-400 space-y-1">
-          <p>✓ src/lib/bluetooth.ts — Coospo HW9 BLE protocol</p>
-          <p>✓ src/lib/hrv-metrics.ts — Full metrics engine (SampEn, DFA, coherence, SI)</p>
-          <p>✓ src/lib/audio.ts — TTS voice guidance + bell tones</p>
-          <p>✓ src/lib/supabase.ts — Auth + database client</p>
-          <p>✓ tailwind.config.js — Neuro Progeny brand tokens</p>
-          <p>✓ next.config.js — iframe embedding headers</p>
+      </header>
+
+      {deviceLost && showAbort ? (
+        <div className="max-w-3xl mx-auto px-5 pt-4" role="status">
+          <div
+            className="rounded-lg px-4 py-3 text-xs"
+            style={{ background: `${C.amber}1a`, border: `1px solid ${C.amber}55` }}
+          >
+            The armband disconnected. Everything captured so far is kept — reconnect the band, or
+            start over from the beginning.
+          </div>
         </div>
-      </div>
+      ) : null}
+
+      <main className="max-w-3xl mx-auto px-5 py-10 sm:py-14">
+        {/* ===== 1. CONNECT ===== */}
+        {phase === 'connect' ? (
+          <Panel>
+            <h1 className="text-2xl font-semibold mb-2" style={{ color: C.indigo }}>
+              Welcome
+            </h1>
+            <p className="text-sm leading-relaxed mb-6" style={{ opacity: 0.72 }}>
+              This is a twenty minute measurement of how your nervous system is currently allocating
+              its resources. You will rest quietly for five minutes, then breathe along with a circle
+              at six different rates. Find somewhere you will not be interrupted.
+            </p>
+
+            <label className="block text-xs font-medium mb-2" style={{ color: C.indigo }}>
+              Your name
+            </label>
+            <input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="First name"
+              className="w-full rounded-xl border px-4 py-3 text-sm mb-6 outline-none"
+              style={{ borderColor: C.mist, background: C.pale }}
+            />
+
+            <div className="space-y-3 mb-6">
+              <button
+                onClick={() => connectDevice('ble')}
+                disabled={!bleSupported || connState === 'connecting'}
+                className="w-full rounded-xl px-5 py-4 text-sm font-semibold border-2 disabled:opacity-40 text-left flex items-center justify-between gap-3"
+                style={{
+                  borderColor: connMode === 'ble' ? C.blue : C.mist,
+                  color: C.indigo,
+                  background: connMode === 'ble' ? `${C.blue}0f` : '#fff',
+                }}
+              >
+                <span>
+                  Connect Coospo HW9
+                  <span className="block text-xs font-normal mt-0.5" style={{ opacity: 0.6 }}>
+                    {bleSupported
+                      ? 'Wear the armband on your forearm, then pair over Bluetooth'
+                      : 'Bluetooth is not available in this browser'}
+                  </span>
+                </span>
+                {connMode === 'ble' && connState === 'connected' ? <Check /> : null}
+              </button>
+
+              <button
+                onClick={() => connectDevice('sim')}
+                disabled={connState === 'connecting'}
+                className="w-full rounded-xl px-5 py-4 text-sm font-medium border disabled:opacity-40 text-left flex items-center justify-between gap-3"
+                style={{
+                  borderColor: connMode === 'sim' ? C.blue : C.mist,
+                  color: C.charcoal,
+                  background: connMode === 'sim' ? `${C.blue}0f` : '#fff',
+                }}
+              >
+                <span>
+                  Use simulation
+                  <span className="block text-xs font-normal mt-0.5" style={{ opacity: 0.6 }}>
+                    Walk through the assessment without an armband
+                  </span>
+                </span>
+                {connMode === 'sim' && connState === 'connected' ? <Check /> : null}
+              </button>
+            </div>
+
+            {connState === 'connecting' ? (
+              <p className="text-xs mb-4" style={{ opacity: 0.6 }}>
+                Connecting…
+              </p>
+            ) : null}
+
+            {connState === 'connected' ? (
+              <div
+                className="rounded-xl px-4 py-3 mb-6 flex items-center gap-3 text-xs"
+                style={{ background: `${C.green}14` }}
+              >
+                <PulseDot hr={hr || 60} />
+                {hr > 0 ? `Signal received — ${hr} bpm` : 'Connected, waiting for the first beats…'}
+              </div>
+            ) : null}
+
+            {connError ? (
+              <p className="text-xs mb-4" style={{ color: C.red }}>
+                {connError}
+              </p>
+            ) : null}
+
+            <PrimaryButton onClick={() => setPhase('checklist')} disabled={!canStart}>
+              Begin
+            </PrimaryButton>
+          </Panel>
+        ) : null}
+
+        {/* ===== 2. CHECKLIST ===== */}
+        {phase === 'checklist' ? (
+          <Panel>
+            <h2 className="text-xl font-semibold mb-2" style={{ color: C.indigo }}>
+              Before we start
+            </h2>
+            <p className="text-sm leading-relaxed mb-6" style={{ opacity: 0.72 }}>
+              These four conditions keep this measurement comparable with the ones that come after it.
+            </p>
+
+            <div className="space-y-2 mb-7">
+              {CHECKLIST.map(([label, why], i) => (
+                <button
+                  key={label}
+                  onClick={() => setChecks((prev) => prev.map((c, j) => (j === i ? !c : c)))}
+                  aria-pressed={checks[i]}
+                  className="w-full text-left rounded-xl border px-4 py-3.5 flex items-start gap-3"
+                  style={{
+                    borderColor: checks[i] ? C.blue : C.mist,
+                    background: checks[i] ? `${C.blue}0d` : '#fff',
+                  }}
+                >
+                  <span
+                    className="mt-0.5 shrink-0 rounded-md flex items-center justify-center"
+                    style={{
+                      width: 18,
+                      height: 18,
+                      border: `1.5px solid ${checks[i] ? C.blue : '#cbd5e0'}`,
+                      background: checks[i] ? C.blue : 'transparent',
+                    }}
+                  >
+                    {checks[i] ? (
+                      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="3.5">
+                        <polyline points="20 6 9 17 4 12" />
+                      </svg>
+                    ) : null}
+                  </span>
+                  <span>
+                    <span className="block text-sm font-medium" style={{ color: C.indigo }}>
+                      {label}
+                    </span>
+                    <span className="block text-xs mt-0.5" style={{ opacity: 0.55 }}>
+                      {why}
+                    </span>
+                  </span>
+                </button>
+              ))}
+            </div>
+
+            <PrimaryButton onClick={() => setPhase('resting-intro')} disabled={!allChecked}>
+              Continue
+            </PrimaryButton>
+          </Panel>
+        ) : null}
+
+        {/* ===== 3. RESTING INTRO ===== */}
+        {phase === 'resting-intro' ? (
+          <Panel>
+            <h2 className="text-xl font-semibold mb-3" style={{ color: C.indigo }}>
+              Resting measurement
+            </h2>
+            <p className="text-sm leading-relaxed mb-4" style={{ opacity: 0.72 }}>
+              For the next five minutes you will sit still with your eyes closed and breathe however
+              your body wants to breathe. Do not try to relax, slow down or control anything — we are
+              reading the pattern your system chooses on its own.
+            </p>
+            <p className="text-sm leading-relaxed mb-7" style={{ opacity: 0.72 }}>
+              A bell sounds when the recording begins and two bells when it is finished. There is
+              nothing to watch, so let the screen go.
+            </p>
+            <PrimaryButton onClick={startResting}>Start resting measurement</PrimaryButton>
+          </Panel>
+        ) : null}
+
+        {/* ===== 4. RESTING ===== */}
+        {phase === 'resting' ? (
+          <div className="text-center py-8" style={{ animation: 'fade-in 0.6s ease-out' }}>
+            <p className="text-xs uppercase tracking-[0.28em] mb-10" style={{ color: C.blue, opacity: 0.7 }}>
+              Eyes closed
+            </p>
+
+            <div className="text-6xl font-light tabular-nums mb-3" style={{ color: C.indigo }}>
+              {formatTime(restingMs - elapsed)}
+            </div>
+
+            <div className="flex items-center justify-center gap-2 mb-12 text-xs" style={{ opacity: 0.5 }}>
+              <PulseDot hr={hr || 60} />
+              {hr > 0 ? `${hr} bpm` : 'listening'}
+            </div>
+
+            <RRTrace data={trace} />
+
+            <div
+              className="mx-auto mt-12 rounded-full overflow-hidden"
+              style={{ width: 220, height: 2, background: C.mist }}
+            >
+              <div
+                style={{
+                  width: `${(elapsed / restingMs) * 100}%`,
+                  height: '100%',
+                  background: C.blue,
+                  opacity: 0.45,
+                  transition: 'width 0.2s linear',
+                }}
+              />
+            </div>
+          </div>
+        ) : null}
+
+        {/* ===== 5. RESTING DONE ===== */}
+        {phase === 'resting-done' ? (
+          <Panel>
+            <h2 className="text-xl font-semibold mb-3" style={{ color: C.indigo }}>
+              Resting measurement captured
+            </h2>
+            {restingMetrics ? (
+              <>
+                <p className="text-sm leading-relaxed mb-6" style={{ opacity: 0.72 }}>
+                  Your baseline is recorded. Take a breath before the next section.
+                </p>
+                <div className="grid grid-cols-2 gap-3 mb-4">
+                  <div className="rounded-xl p-4" style={{ background: C.pale }}>
+                    <div className="text-[11px] uppercase tracking-[0.14em]" style={{ color: C.blue }}>
+                      Heart rate
+                    </div>
+                    <div className="text-2xl font-semibold mt-1" style={{ color: C.indigo }}>
+                      {Math.round(restingMetrics.meanHR)}
+                      <span className="text-xs font-normal ml-1" style={{ opacity: 0.5 }}>
+                        bpm
+                      </span>
+                    </div>
+                  </div>
+                  <div className="rounded-xl p-4" style={{ background: C.pale }}>
+                    <div className="text-[11px] uppercase tracking-[0.14em]" style={{ color: C.blue }}>
+                      RMSSD
+                    </div>
+                    <div className="text-2xl font-semibold mt-1" style={{ color: C.indigo }}>
+                      {restingMetrics.rmssd.toFixed(1)}
+                      <span className="text-xs font-normal ml-1" style={{ opacity: 0.5 }}>
+                        ms
+                      </span>
+                    </div>
+                  </div>
+                </div>
+                <p className="text-xs mb-7" style={{ opacity: 0.5 }}>
+                  {restingMetrics.rrCount} heartbeats analysed
+                </p>
+              </>
+            ) : (
+              <p className="text-sm leading-relaxed mb-7" style={{ color: C.red }}>
+                Not enough clean signal came through to compute your baseline. Check the armband fit
+                and start over when you are ready.
+              </p>
+            )}
+            <PrimaryButton onClick={() => setPhase('rf-intro')}>Continue</PrimaryButton>
+          </Panel>
+        ) : null}
+
+        {/* ===== 6. RF INTRO ===== */}
+        {phase === 'rf-intro' ? (
+          <Panel>
+            <h2 className="text-xl font-semibold mb-3" style={{ color: C.indigo }}>
+              Breathing measurement
+            </h2>
+            <p className="text-sm leading-relaxed mb-4" style={{ opacity: 0.72 }}>
+              Every nervous system has one breathing rate where the heart and the breath swing
+              together most strongly. Finding yours takes twelve minutes: six rates, two minutes each,
+              from slow to slightly faster.
+            </p>
+            <p className="text-sm leading-relaxed mb-7" style={{ opacity: 0.72 }}>
+              Keep your eyes open and follow the circle — inhale as it grows, exhale as it settles.
+              Breathe gently through your nose. If a rate feels like effort, breathe more softly
+              rather than deeper. A bell and a voice announce each change.
+            </p>
+            <PrimaryButton onClick={startRF}>Start breathing measurement</PrimaryButton>
+          </Panel>
+        ) : null}
+
+        {/* ===== 7. RF ===== */}
+        {phase === 'rf' ? (
+          <div className="flex flex-col items-center py-4" style={{ animation: 'fade-in 0.6s ease-out' }}>
+            <p className="text-xs uppercase tracking-[0.28em] mb-1" style={{ color: C.blue, opacity: 0.7 }}>
+              Rate {rfIndex + 1} of {RF_RATES.length}
+            </p>
+            <div className="text-3xl font-semibold mb-1" style={{ color: C.indigo }}>
+              {RF_RATES[rfIndex].toFixed(1)}
+              <span className="text-sm font-normal ml-1.5" style={{ opacity: 0.5 }}>
+                breaths / min
+              </span>
+            </div>
+            <div className="text-sm tabular-nums mb-6" style={{ opacity: 0.5 }}>
+              {formatTime(rfSegmentMs - elapsed)}
+            </div>
+
+            <BreathPacer rate={RF_RATES[rfIndex]} />
+
+            <div className="flex items-center gap-2.5 mt-8">
+              {RF_RATES.map((r, i) => (
+                <span
+                  key={r}
+                  title={`${r.toFixed(1)} breaths / min`}
+                  className="rounded-full"
+                  style={{
+                    width: i === rfIndex ? 11 : 9,
+                    height: i === rfIndex ? 11 : 9,
+                    background: i < rfIndex ? C.blue : i === rfIndex ? '#fff' : C.mist,
+                    border: i === rfIndex ? `2px solid ${C.blue}` : 'none',
+                    transition: 'all 0.3s',
+                  }}
+                />
+              ))}
+            </div>
+
+            <div className="flex items-center gap-2 mt-6 text-xs" style={{ opacity: 0.45 }}>
+              <PulseDot hr={hr || 60} />
+              {hr > 0 ? `${hr} bpm` : 'listening'}
+            </div>
+          </div>
+        ) : null}
+
+        {/* ===== 8. RF DONE ===== */}
+        {phase === 'rf-done' ? (
+          <div className="w-full max-w-xl mx-auto" style={{ animation: 'fade-in 0.5s ease-out' }}>
+            <div className="rounded-2xl bg-white p-7 border" style={{ borderColor: C.mist }}>
+              <h2 className="text-xl font-semibold mb-2" style={{ color: C.indigo }}>
+                Your resonance frequency
+              </h2>
+              <p className="text-sm leading-relaxed mb-6" style={{ opacity: 0.72 }}>
+                Your heart responded most strongly at{' '}
+                <strong style={{ color: C.blue }}>{resonance.rate.toFixed(1)} breaths per minute</strong>
+                . That is the pace at which your breath and your heart rhythm reinforce each other.
+              </p>
+
+              <div style={{ height: 240 }}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart data={chartData} margin={{ top: 8, right: 8, left: -18, bottom: 4 }}>
+                    <CartesianGrid stroke={C.mist} vertical={false} />
+                    <XAxis
+                      dataKey="rate"
+                      tick={{ fontSize: 11, fill: C.charcoal }}
+                      stroke={C.mist}
+                      tickFormatter={(v) => Number(v).toFixed(1)}
+                    />
+                    <YAxis tick={{ fontSize: 11, fill: C.charcoal }} stroke={C.mist} width={44} />
+                    <Tooltip
+                      contentStyle={{ borderRadius: 10, border: `1px solid ${C.mist}`, fontSize: 12 }}
+                      labelFormatter={(v) => `${Number(v).toFixed(1)} breaths / min`}
+                    />
+                    <ReferenceLine x={resonance.rate} stroke={C.green} strokeDasharray="4 4" strokeWidth={2} />
+                    <Line
+                      type="monotone"
+                      dataKey="sdnn"
+                      name="Amplitude"
+                      stroke={C.blue}
+                      strokeWidth={2.5}
+                      dot={{ r: 3, fill: C.blue }}
+                    />
+                    <Line
+                      type="monotone"
+                      dataKey="coherence"
+                      name="Coherence"
+                      stroke={C.amber}
+                      strokeWidth={2}
+                      dot={{ r: 3, fill: C.amber }}
+                    />
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+
+              <div className="flex items-center justify-center gap-5 mt-2 mb-7 text-[11px]" style={{ opacity: 0.6 }}>
+                <span className="flex items-center gap-1.5">
+                  <span style={{ width: 14, height: 2, background: C.blue, display: 'inline-block' }} />
+                  Amplitude
+                </span>
+                <span className="flex items-center gap-1.5">
+                  <span style={{ width: 14, height: 2, background: C.amber, display: 'inline-block' }} />
+                  Coherence
+                </span>
+                <span className="flex items-center gap-1.5">
+                  <span style={{ width: 14, height: 2, background: C.green, display: 'inline-block' }} />
+                  Your resonance
+                </span>
+              </div>
+
+              {saveError ? (
+                <p className="text-xs mb-4" style={{ color: C.red }}>
+                  {saveError}
+                </p>
+              ) : null}
+
+              <PrimaryButton onClick={finalize} disabled={saving}>
+                {saving ? 'Saving…' : 'Save my assessment'}
+              </PrimaryButton>
+            </div>
+          </div>
+        ) : null}
+
+        {/* ===== 9. COMPLETE ===== */}
+        {phase === 'complete' ? (
+          <div className="w-full max-w-2xl mx-auto" style={{ animation: 'fade-in 0.5s ease-out' }}>
+            <div className="text-center mb-8">
+              <p className="text-xs uppercase tracking-[0.28em] mb-2" style={{ color: C.blue, opacity: 0.7 }}>
+                Assessment complete
+              </p>
+              <h2 className="text-2xl font-semibold" style={{ color: C.indigo }}>
+                {name.trim() ? `Here is your reading, ${name.trim()}` : 'Here is your reading'}
+              </h2>
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-8">
+              <MetricCard
+                label="Recovery Index"
+                value={String(recovery)}
+                unit="/ 100"
+                accent={level.color}
+                note="How much resource your system currently has free for repair and adaptation."
+              />
+              <MetricCard
+                label="Heart Rate"
+                value={restingMetrics ? String(Math.round(restingMetrics.meanHR)) : '—'}
+                unit="bpm"
+                note="Your resting pace — the baseline cost of running your system right now."
+              />
+              <MetricCard
+                label="Breath Rate"
+                value={restingMetrics ? restingMetrics.breathRate.toFixed(1) : '—'}
+                unit="br/min"
+                note="How fast you breathe when nothing is being asked of you."
+              />
+              <MetricCard
+                label="Coherence"
+                value={restingMetrics ? restingMetrics.coherence.toFixed(0) : '—'}
+                unit="%"
+                note="How closely your heart rhythm and your breath moved together at rest."
+              />
+              <MetricCard
+                label="Complexity"
+                value={restingMetrics ? restingMetrics.sampEn.toFixed(2) : '—'}
+                note="The adaptive range in your signal — room to respond to whatever comes next."
+              />
+              <MetricCard
+                label="Resonance"
+                value={resonance.rate.toFixed(1)}
+                unit="br/min"
+                note="The breath rate your system amplifies most. This is where to practise."
+              />
+            </div>
+
+            <div className="rounded-2xl p-7 mb-8 border bg-white" style={{ borderColor: `${level.color}55` }}>
+              <div className="flex items-center gap-3 mb-3">
+                <span className="rounded-full" style={{ width: 12, height: 12, background: level.color }} />
+                <h3 className="text-lg font-semibold" style={{ color: level.color }}>
+                  {level.label}
+                </h3>
+              </div>
+              <p className="text-sm leading-relaxed" style={{ opacity: 0.78 }}>
+                {level.description}
+              </p>
+            </div>
+
+            <div className="rounded-2xl p-7 mb-6" style={{ background: C.indigo, color: '#fff' }}>
+              <h3 className="text-lg font-semibold mb-2">Talk it through</h3>
+              <p className="text-sm leading-relaxed mb-5" style={{ opacity: 0.82 }}>
+                A coaching call turns these numbers into a plan — what your system is protecting, and
+                the smallest change that gives it room to reinvest. Use code <strong>{PROMO_CODE}</strong>{' '}
+                when you book.
+              </p>
+              <a
+                href={`${COACHING_URL}?promo=${PROMO_CODE}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-block rounded-xl px-6 py-3.5 text-sm font-semibold"
+                style={{ background: '#fff', color: C.indigo }}
+              >
+                Book a coaching call
+              </a>
+            </div>
+
+            <div className="text-center">
+              <a
+                href={PLATFORM_URL}
+                className="text-sm font-medium underline underline-offset-4"
+                style={{ color: C.blue }}
+              >
+                Return to University
+              </a>
+            </div>
+          </div>
+        ) : null}
+      </main>
+
+      {/* ===== ABORT CONFIRMATION ===== */}
+      {confirmAbort ? (
+        <div
+          className="fixed inset-0 z-30 flex items-center justify-center px-5"
+          style={{ background: 'rgba(57,57,57,0.45)' }}
+          role="dialog"
+          aria-modal="true"
+        >
+          <div className="w-full max-w-sm rounded-2xl bg-white p-7">
+            <h3 className="text-lg font-semibold mb-2" style={{ color: C.indigo }}>
+              Start over?
+            </h3>
+            <p className="text-sm leading-relaxed mb-6" style={{ opacity: 0.7 }}>
+              Everything recorded so far will be discarded and you will return to the beginning. This
+              cannot be undone.
+            </p>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setConfirmAbort(false)}
+                className="flex-1 rounded-xl px-5 py-3 text-sm font-medium border"
+                style={{ borderColor: C.mist, color: C.charcoal }}
+              >
+                Keep going
+              </button>
+              <button
+                onClick={abort}
+                className="flex-1 rounded-xl px-5 py-3 text-sm font-semibold text-white"
+                style={{ background: C.red }}
+              >
+                Start over
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
