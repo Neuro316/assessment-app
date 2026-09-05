@@ -21,7 +21,14 @@ import {
   YAxis,
 } from 'recharts';
 
-import { connectHW9, connectSimulated, isBLESupported, type HRDataPoint } from '@/lib/bluetooth';
+import {
+  connectHW9,
+  connectSimulated,
+  isBLESupported,
+  reconnectHW9,
+  type HRConnection,
+  type HRDataPoint,
+} from '@/lib/bluetooth';
 import { computeAllMetrics, type HRVMetrics } from '@/lib/hrv-metrics';
 import { bell, cancelSpeech, doubleBell, speak } from '@/lib/audio';
 import { createSupabaseClient, getParticipant } from '@/lib/supabase';
@@ -275,6 +282,203 @@ function BreathPacer({ rate }: { rate: number }) {
   );
 }
 
+// Shown while Chrome's native device picker is being summoned, so the participant
+// sees branded UI -> a brief system dialog -> branded UI, rather than the system
+// dialog arriving out of nowhere over the welcome screen.
+function BleSearchOverlay() {
+  return (
+    <div
+      className="fixed inset-0 z-40 flex flex-col items-center justify-center px-6"
+      style={{ background: C.pale, animation: 'fade-in 0.3s ease-out' }}
+      role="status"
+      aria-live="polite"
+    >
+      <div className="flex items-center gap-2.5 mb-16">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke={C.blue} strokeWidth="2">
+          <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z" />
+        </svg>
+        <span
+          className="text-xs font-semibold uppercase"
+          style={{ color: C.indigo, letterSpacing: '0.18em' }}
+        >
+          Neuro Progeny
+        </span>
+      </div>
+
+      <div className="relative flex items-center justify-center mb-10" style={{ width: 140, height: 140 }}>
+        <span
+          className="absolute rounded-full"
+          style={{ width: 140, height: 140, border: `1px solid ${C.blue}`, animation: 'ble-ring 2s ease-out infinite' }}
+        />
+        <span
+          className="absolute rounded-full"
+          style={{ width: 140, height: 140, border: `1px solid ${C.blue}`, animation: 'ble-ring 2s ease-out 1s infinite' }}
+        />
+        <span
+          className="relative flex items-center justify-center rounded-full"
+          style={{
+            width: 76,
+            height: 76,
+            background: '#fff',
+            border: `1px solid ${C.mist}`,
+            animation: 'ble-pulse 2s ease-in-out infinite',
+          }}
+        >
+          <svg
+            width="30"
+            height="30"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke={C.blue}
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <path d="M6.5 6.5l11 11L12 23V1l5.5 5.5-11 11" />
+          </svg>
+        </span>
+      </div>
+
+      <h2 className="text-xl font-semibold mb-2 text-center" style={{ color: C.indigo }}>
+        Searching for your HW9 armband…
+      </h2>
+      <p className="text-sm text-center max-w-xs leading-relaxed" style={{ opacity: 0.6 }}>
+        A system dialog will appear — select your HW9 device to continue.
+      </p>
+    </div>
+  );
+}
+
+function BatteryPill({ level }: { level: number }) {
+  const low = level < 20;
+  const color = low ? C.amber : C.charcoal;
+  return (
+    <span
+      className="flex items-center gap-1.5 text-xs tabular-nums"
+      style={{ color, opacity: low ? 1 : 0.6 }}
+      title={`Armband battery ${level}%`}
+    >
+      <svg width="22" height="12" viewBox="0 0 26 14" fill="none" aria-hidden>
+        <rect x="0.75" y="0.75" width="21.5" height="12.5" rx="2.75" stroke={color} strokeWidth="1.5" />
+        <rect x="3" y="3" width={Math.max(1.5, (level / 100) * 17)} height="8" rx="1" fill={color} />
+        <rect x="23.5" y="4.5" width="2" height="5" rx="1" fill={color} />
+      </svg>
+      {level}%
+    </span>
+  );
+}
+
+// Sits on top of whatever phase is running — the participant never navigates away,
+// so a recording can pick up exactly where it froze.
+function DisconnectOverlay({
+  paused,
+  reconnecting,
+  error,
+  onReconnect,
+  onSimulate,
+}: {
+  paused: boolean;
+  reconnecting: boolean;
+  error: string | null;
+  onReconnect: () => void;
+  onSimulate: () => void;
+}) {
+  return (
+    <div
+      className="fixed inset-0 z-50 flex flex-col items-center justify-center px-6"
+      style={{ background: 'rgba(240,244,248,0.97)', animation: 'fade-in 0.3s ease-out' }}
+      role="alertdialog"
+      aria-modal="true"
+    >
+      <div className="relative flex items-center justify-center mb-10" style={{ width: 140, height: 140 }}>
+        <span
+          className="absolute rounded-full"
+          style={{ width: 140, height: 140, border: `1px solid ${C.red}`, animation: 'ble-ring 2s ease-out infinite' }}
+        />
+        <span
+          className="absolute rounded-full"
+          style={{ width: 140, height: 140, border: `1px solid ${C.red}`, animation: 'ble-ring 2s ease-out 1s infinite' }}
+        />
+        <span
+          className="relative flex items-center justify-center rounded-full"
+          style={{
+            width: 76,
+            height: 76,
+            background: '#fff',
+            border: `1px solid ${C.red}44`,
+            animation: 'ble-pulse 2s ease-in-out infinite',
+          }}
+        >
+          <svg
+            width="30"
+            height="30"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke={C.red}
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <path d="M6.5 6.5l11 11L12 23V1l5.5 5.5-11 11" />
+          </svg>
+        </span>
+      </div>
+
+      <h2 className="text-xl font-semibold mb-2 text-center" style={{ color: C.indigo }}>
+        Armband Disconnected
+      </h2>
+      <p className="text-sm text-center max-w-sm leading-relaxed mb-8" style={{ opacity: 0.65 }}>
+        {paused
+          ? 'Your recording is paused. Reconnect your Coospo HW9 to resume from where you left off.'
+          : 'Reconnect your Coospo HW9 to carry on with the assessment.'}
+      </p>
+
+      {error ? (
+        <p className="text-xs text-center max-w-xs mb-4" style={{ color: C.red }}>
+          {error}
+        </p>
+      ) : null}
+
+      <div className="w-full max-w-xs">
+        <button
+          onClick={onReconnect}
+          disabled={reconnecting}
+          className="w-full rounded-xl px-6 py-4 text-white text-sm font-semibold tracking-wide disabled:opacity-40"
+          style={{ background: C.blue }}
+        >
+          {reconnecting ? 'Reconnecting…' : 'Reconnect'}
+        </button>
+        <button
+          onClick={onSimulate}
+          disabled={reconnecting}
+          className="w-full mt-3 text-xs font-medium underline underline-offset-4 disabled:opacity-40"
+          style={{ color: C.charcoal, opacity: 0.55 }}
+        >
+          Use simulation instead
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function Toast({ text }: { text: string }) {
+  return (
+    <div
+      className="fixed left-1/2 z-50 rounded-full px-5 py-2.5 text-xs font-medium text-white shadow-lg"
+      style={{
+        bottom: 32,
+        transform: 'translateX(-50%)',
+        background: C.indigo,
+        animation: 'fade-in 0.3s ease-out',
+      }}
+      role="status"
+      aria-live="polite"
+    >
+      {text}
+    </div>
+  );
+}
+
 function MetricCard({
   label,
   value,
@@ -362,10 +566,23 @@ export default function AssessmentPage() {
   // Device
   const [connState, setConnState] = useState<'idle' | 'connecting' | 'connected'>('idle');
   const [connMode, setConnMode] = useState<'ble' | 'sim' | null>(null);
-  const [connError, setConnError] = useState<string | null>(null);
-  const [deviceLost, setDeviceLost] = useState(false);
+  const [connNotice, setConnNotice] = useState<{ text: string; tone: 'error' | 'muted' } | null>(null);
+  const [blePrompt, setBlePrompt] = useState(false);
   const [bleSupported, setBleSupported] = useState(false);
+  const [battery, setBattery] = useState<number | null>(null);
   const disconnectRef = useRef<(() => void) | null>(null);
+  // Held so a reconnect can go straight back to the same strap, no picker.
+  const deviceRef = useRef<HRConnection['device']>(null);
+  // Set once a silent reconnect to the known device has failed, so the next tap
+  // goes straight to the picker rather than burning the activation window again.
+  const directReconnectFailedRef = useRef(false);
+
+  // Disconnect / resume
+  const [showDisconnectOverlay, setShowDisconnectOverlay] = useState(false);
+  const [reconnecting, setReconnecting] = useState(false);
+  const [reconnectError, setReconnectError] = useState<string | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Live signal
   const [hr, setHr] = useState(0);
@@ -377,9 +594,11 @@ export default function AssessmentPage() {
   // Checklist
   const [checks, setChecks] = useState<boolean[]>([false, false, false, false]);
 
-  // Segment clock
+  // Segment clock. pausedRef holds the frozen elapsed time while the strap is away;
+  // null means the clock is running.
   const segStartRef = useRef(0);
   const segDoneRef = useRef(false);
+  const pausedRef = useRef<number | null>(null);
   const [elapsed, setElapsed] = useState(0);
 
   // Results
@@ -426,19 +645,35 @@ export default function AssessmentPage() {
     })();
   }, []);
 
+  // handleDisconnect fires from a BLE event, so it reads the phase off a ref
+  // rather than closing over stale state.
+  const phaseRef = useRef<Phase>('connect');
+  useEffect(() => {
+    phaseRef.current = phase;
+  }, [phase]);
+
   // ----- teardown -----
   useEffect(
     () => () => {
       cancelSpeech();
       disconnectRef.current?.();
+      if (toastTimer.current) clearTimeout(toastTimer.current);
     },
     []
   );
+
+  const showToast = useCallback((text: string) => {
+    setToast(text);
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    toastTimer.current = setTimeout(() => setToast(null), 3400);
+  }, []);
 
   // ----- streaming -----
   const handleData = useCallback((d: HRDataPoint) => {
     if (d.heartRate > 0) setHr(d.heartRate);
     if (d.rrIntervals.length) {
+      // Paused mid-recording: hold on to everything already collected, take nothing new.
+      if (pausedRef.current !== null) return;
       if (collectorRef.current) collectorRef.current.push(...d.rrIntervals);
       setTrace((prev) => [...prev, ...d.rrIntervals].slice(-80));
     }
@@ -447,33 +682,122 @@ export default function AssessmentPage() {
   const handleDisconnect = useCallback(() => {
     disconnectRef.current = null;
     setConnState('idle');
-    setConnMode(null);
-    setDeviceLost(true);
+    setBattery(null);
+
+    const p = phaseRef.current;
+    // Freeze the countdown where it stands so the segment can resume intact.
+    if ((p === 'resting' || p === 'rf') && pausedRef.current === null) {
+      pausedRef.current = Date.now() - segStartRef.current;
+    }
+    if (p !== 'connect' && p !== 'complete') {
+      setReconnectError(null);
+      setShowDisconnectOverlay(true);
+    }
   }, []);
+
+  const adoptConnection = useCallback((conn: HRConnection, mode: 'ble' | 'sim') => {
+    disconnectRef.current = conn.disconnect;
+    deviceRef.current = conn.device;
+    directReconnectFailedRef.current = false;
+    setBattery(conn.battery);
+    setConnMode(mode);
+    setConnState('connected');
+  }, []);
+
+  // Dismiss the overlay and pick the recording back up exactly where it froze.
+  const resumeAfterReconnect = useCallback(() => {
+    setShowDisconnectOverlay(false);
+    setReconnectError(null);
+
+    const wasPaused = pausedRef.current !== null;
+    if (wasPaused) {
+      // Shift the segment start forward by the time spent disconnected.
+      segStartRef.current = Date.now() - (pausedRef.current as number);
+      pausedRef.current = null;
+    }
+
+    bell();
+    showToast(wasPaused ? 'Reconnected — recording resumed' : 'Reconnected');
+  }, [showToast]);
+
+  const reconnect = useCallback(async () => {
+    setReconnecting(true);
+    setReconnectError(null);
+    try {
+      let conn: HRConnection;
+      if (deviceRef.current && !directReconnectFailedRef.current) {
+        try {
+          // Same strap, already paired — straight back in, no picker.
+          conn = await reconnectHW9(deviceRef.current, handleData, handleDisconnect, setBattery);
+        } catch {
+          // Out of range too long, or the pairing was dropped. A failed GATT connect
+          // can outlast the ~5s user-activation window, so requestDevice() here may
+          // be refused; the next tap skips straight to it with a fresh gesture.
+          directReconnectFailedRef.current = true;
+          conn = await connectHW9(handleData, handleDisconnect, setBattery);
+        }
+      } else {
+        conn = await connectHW9(handleData, handleDisconnect, setBattery);
+      }
+      adoptConnection(conn, 'ble');
+      resumeAfterReconnect();
+    } catch (e: any) {
+      setReconnectError(
+        e?.name === 'NotFoundError'
+          ? 'No armband selected. Tap Reconnect to try again.'
+          : e?.name === 'SecurityError' || e?.name === 'NotAllowedError'
+            ? 'Tap Reconnect again to choose your armband.'
+            : e?.message || 'Could not reconnect to the armband.'
+      );
+    } finally {
+      setReconnecting(false);
+    }
+  }, [adoptConnection, handleData, handleDisconnect, resumeAfterReconnect]);
+
+  const reconnectSimulated = useCallback(() => {
+    adoptConnection(connectSimulated(handleData, handleDisconnect, setBattery), 'sim');
+    resumeAfterReconnect();
+  }, [adoptConnection, handleData, handleDisconnect, resumeAfterReconnect]);
 
   const connectDevice = useCallback(
     async (mode: 'ble' | 'sim') => {
-      setConnError(null);
-      setDeviceLost(false);
+      setConnNotice(null);
+      setShowDisconnectOverlay(false);
       setConnState('connecting');
+
+      if (mode === 'sim') {
+        try {
+          adoptConnection(connectSimulated(handleData, handleDisconnect, setBattery), 'sim');
+        } catch (e: any) {
+          setConnState('idle');
+          setConnNotice({ text: e?.message || 'Could not start simulation.', tone: 'error' });
+        }
+        return;
+      }
+
+      // Branded overlay first, so Chrome's picker reads as a brief system
+      // confirmation rather than the main interaction.
+      setBlePrompt(true);
+
+      // Deliberately 1s: long enough for the branded screen to register, and well
+      // inside the ~5s transient user activation window that requestDevice() needs.
+      await new Promise((r) => setTimeout(r, 1000));
+
       try {
-        const stop =
-          mode === 'ble'
-            ? await connectHW9(handleData, handleDisconnect)
-            : connectSimulated(handleData, handleDisconnect);
-        disconnectRef.current = stop;
-        setConnMode(mode);
-        setConnState('connected');
+        adoptConnection(await connectHW9(handleData, handleDisconnect, setBattery), 'ble');
       } catch (e: any) {
         setConnState('idle');
-        setConnError(
+        setConnNotice(
+          // Chrome throws NotFoundError when the participant dismisses the picker.
           e?.name === 'NotFoundError'
-            ? 'No armband was selected. Try again, or use simulation to walk through the assessment.'
-            : e?.message || 'Could not connect to the armband.'
+            ? { text: 'Connection cancelled. Tap Connect to try again.', tone: 'muted' }
+            : { text: e?.message || 'Could not connect to the armband.', tone: 'error' }
         );
+      } finally {
+        setBlePrompt(false);
       }
     },
-    [handleData, handleDisconnect]
+    [adoptConnection, handleData, handleDisconnect]
   );
 
   // ===== PHASE TRANSITIONS =====
@@ -540,6 +864,8 @@ export default function AssessmentPage() {
     if (phase !== 'resting' && phase !== 'rf') return;
     const duration = phase === 'resting' ? restingMs : rfSegmentMs;
     const id = setInterval(() => {
+      // Strap is away: hold the countdown exactly where it froze.
+      if (pausedRef.current !== null) return;
       const e = Date.now() - segStartRef.current;
       setElapsed(Math.min(e, duration));
       if (e >= duration && !segDoneRef.current) {
@@ -558,7 +884,12 @@ export default function AssessmentPage() {
     restingRRRef.current = [];
     rfRRRef.current = RF_RATES.map(() => []);
     segDoneRef.current = true;
+    pausedRef.current = null;
+    directReconnectFailedRef.current = false;
     setConfirmAbort(false);
+    setShowDisconnectOverlay(false);
+    setReconnectError(null);
+    setToast(null);
     setElapsed(0);
     setChecks([false, false, false, false]);
     setRestingMetrics(null);
@@ -639,6 +970,8 @@ export default function AssessmentPage() {
       // Nothing left to record — release the armband and its wake lock.
       disconnectRef.current?.();
       disconnectRef.current = null;
+      deviceRef.current = null;
+      setBattery(null);
       setConnState('idle');
       setPhase('complete');
     } catch (e: any) {
@@ -689,6 +1022,7 @@ export default function AssessmentPage() {
                 {hr} bpm
               </span>
             ) : null}
+            {connState === 'connected' && battery !== null ? <BatteryPill level={battery} /> : null}
             {showAbort ? (
               <button
                 onClick={() => setConfirmAbort(true)}
@@ -701,18 +1035,6 @@ export default function AssessmentPage() {
           </div>
         </div>
       </header>
-
-      {deviceLost && showAbort ? (
-        <div className="max-w-3xl mx-auto px-5 pt-4" role="status">
-          <div
-            className="rounded-lg px-4 py-3 text-xs"
-            style={{ background: `${C.amber}1a`, border: `1px solid ${C.amber}55` }}
-          >
-            The armband disconnected. Everything captured so far is kept — reconnect the band, or
-            start over from the beginning.
-          </div>
-        </div>
-      ) : null}
 
       <main className="max-w-3xl mx-auto px-5 py-10 sm:py-14">
         {/* ===== 1. CONNECT ===== */}
@@ -796,9 +1118,16 @@ export default function AssessmentPage() {
               </div>
             ) : null}
 
-            {connError ? (
-              <p className="text-xs mb-4" style={{ color: C.red }}>
-                {connError}
+            {connNotice ? (
+              <p
+                className="text-xs mb-4"
+                style={
+                  connNotice.tone === 'error'
+                    ? { color: C.red }
+                    : { color: C.charcoal, opacity: 0.55 }
+                }
+              >
+                {connNotice.text}
               </p>
             ) : null}
 
@@ -1198,6 +1527,22 @@ export default function AssessmentPage() {
           </div>
         ) : null}
       </main>
+
+      {/* ===== BLE SEARCH OVERLAY ===== */}
+      {blePrompt ? <BleSearchOverlay /> : null}
+
+      {/* ===== DISCONNECT / RESUME ===== */}
+      {showDisconnectOverlay ? (
+        <DisconnectOverlay
+          paused={pausedRef.current !== null}
+          reconnecting={reconnecting}
+          error={reconnectError}
+          onReconnect={reconnect}
+          onSimulate={reconnectSimulated}
+        />
+      ) : null}
+
+      {toast ? <Toast text={toast} /> : null}
 
       {/* ===== ABORT CONFIRMATION ===== */}
       {confirmAbort ? (
