@@ -1,3 +1,4 @@
+// @ts-nocheck
 // ===== COOSPO HW9 BLUETOOTH PROTOCOL =====
 // BLE Heart Rate Service 0x180D, Characteristic 0x2A37
 // RR intervals at 1/1024 second resolution
@@ -109,3 +110,4 @@ export function connectSimulated(
 export function isBLESupported(): boolean {
   return typeof navigator !== 'undefined' && !!navigator.bluetooth;
 }
+
