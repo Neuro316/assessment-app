@@ -32,6 +32,13 @@ import {
 import { computeAllMetrics, type HRVMetrics } from '@/lib/hrv-metrics';
 import { bell, cancelSpeech, doubleBell, speak } from '@/lib/audio';
 import { createSupabaseClient, getParticipant } from '@/lib/supabase';
+import {
+  clearSession,
+  formatSavedAt,
+  loadSession,
+  saveSession,
+  type SessionState,
+} from '@/lib/session';
 
 // ===== BRAND =====
 const C = {
@@ -372,12 +379,14 @@ function BatteryPill({ level }: { level: number }) {
 // so a recording can pick up exactly where it froze.
 function DisconnectOverlay({
   paused,
+  resumed,
   reconnecting,
   error,
   onReconnect,
   onSimulate,
 }: {
   paused: boolean;
+  resumed: boolean;
   reconnecting: boolean;
   error: string | null;
   onReconnect: () => void;
@@ -425,7 +434,7 @@ function DisconnectOverlay({
       </div>
 
       <h2 className="text-xl font-semibold mb-2 text-center" style={{ color: C.indigo }}>
-        Armband Disconnected
+        {resumed ? 'Reconnect Your Armband' : 'Armband Disconnected'}
       </h2>
       <p className="text-sm text-center max-w-sm leading-relaxed mb-8" style={{ opacity: 0.65 }}>
         {paused
@@ -461,6 +470,62 @@ function DisconnectOverlay({
   );
 }
 
+function ResumeOverlay({
+  savedAt,
+  onResume,
+  onStartOver,
+}: {
+  savedAt: number;
+  onResume: () => void;
+  onStartOver: () => void;
+}) {
+  return (
+    <div
+      className="fixed inset-0 z-50 flex flex-col items-center justify-center px-6"
+      style={{ background: 'rgba(240,244,248,0.97)', animation: 'fade-in 0.3s ease-out' }}
+      role="alertdialog"
+      aria-modal="true"
+    >
+      <div className="flex items-center gap-2.5 mb-12">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke={C.blue} strokeWidth="2">
+          <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z" />
+        </svg>
+        <span
+          className="text-xs font-semibold uppercase"
+          style={{ color: C.indigo, letterSpacing: '0.18em' }}
+        >
+          Neuro Progeny
+        </span>
+      </div>
+
+      <h2 className="text-xl font-semibold mb-3 text-center" style={{ color: C.indigo }}>
+        You have an assessment in progress
+      </h2>
+      <p className="text-sm text-center max-w-sm leading-relaxed mb-8" style={{ opacity: 0.68 }}>
+        We saved your place at {formatSavedAt(savedAt)}. Would you like to resume where you left
+        off? Everything recorded so far is still here.
+      </p>
+
+      <div className="w-full max-w-xs">
+        <button
+          onClick={onResume}
+          className="w-full rounded-xl px-6 py-4 text-white text-sm font-semibold tracking-wide"
+          style={{ background: C.blue }}
+        >
+          Resume
+        </button>
+        <button
+          onClick={onStartOver}
+          className="w-full mt-3 text-xs font-medium underline underline-offset-4"
+          style={{ color: C.charcoal, opacity: 0.55 }}
+        >
+          Start over
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function Toast({ text }: { text: string }) {
   return (
     <div
@@ -479,22 +544,172 @@ function Toast({ text }: { text: string }) {
   );
 }
 
+
+// What each headline number actually means, in the participant's language.
+const METRIC_TIPS: Record<string, string> = {
+  recovery:
+    'Your Recovery Index is derived from RMSSD, which measures the variation in timing between consecutive heartbeats. Higher variation means your nervous system can shift fluidly between activation and rest. This is the single strongest short-term indicator of how much capacity your system has available right now.',
+  heartRate:
+    'Your resting heart rate reflects how hard your cardiovascular system is working just to keep you at baseline. A lower resting heart rate generally means your system is running more efficiently, requiring less effort to maintain normal function. This number is influenced by fitness, hydration, sleep, and current stress load.',
+  breathRate:
+    'Your natural breathing pace at rest reflects your baseline level of physiological activation. Slower resting breath rates are associated with greater parasympathetic tone, meaning your system is spending less energy on activation and has more available for recovery and adaptation.',
+  coherence:
+    'Coherence measures how organized your heart rhythm is around a single dominant pattern. When coherence is high, your heart, lungs, and autonomic nervous system are working in sync. This is not about being calm — it is about being synchronized, which can happen during focused effort as well as during rest.',
+  complexity:
+    'Complexity is measured using Sample Entropy, which quantifies how many different response patterns your nervous system has available. Moderate complexity is the signature of a healthy, adaptive system — not rigid and repetitive, but not random either. It means your system has options and can flexibly shift between them as demands change.',
+  resonance:
+    'Your resonance frequency is the breathing pace where your heart rate variability reaches its peak amplitude. At this rate, each breath cycle maximally amplifies the natural oscillation in your heart rhythm. Breathing at this pace during training sessions produces the strongest cardiovascular training signal. Most adults resonate between 4.5 and 7.0 breaths per minute.',
+};
+
+// Panel is fixed-positioned and measured against the viewport rather than the card,
+// so it can never run off the edge of a narrow screen.
+interface TipAnchor {
+  left: number;
+  top?: number;
+  bottom?: number;
+  width: number;
+}
+
+function InfoTip({
+  tipId,
+  label,
+  openTip,
+  onToggleTip,
+}: {
+  tipId: string;
+  label: string;
+  openTip: string | null;
+  onToggleTip: (id: string | null) => void;
+}) {
+  const btnRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const [anchor, setAnchor] = useState<TipAnchor | null>(null);
+  const open = openTip === tipId;
+
+  useEffect(() => {
+    if (!open) {
+      setAnchor(null);
+      return;
+    }
+    const el = btnRef.current;
+    if (!el) return;
+
+    const r = el.getBoundingClientRect();
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+
+    const width = Math.min(280, vw - 24);
+    // Right-align to the icon, then clamp both edges into the viewport.
+    const left = Math.max(12, Math.min(r.right - width, vw - width - 12));
+
+    // Flip above the icon when there is not enough room beneath it.
+    const ESTIMATED_HEIGHT = 240;
+    if (r.bottom + 8 + ESTIMATED_HEIGHT > vh && r.top > vh - r.bottom) {
+      setAnchor({ left, bottom: vh - r.top + 8, width });
+    } else {
+      setAnchor({ left, top: r.bottom + 8, width });
+    }
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onPointerDown = (e: PointerEvent) => {
+      const t = e.target as Node;
+      if (btnRef.current?.contains(t) || panelRef.current?.contains(t)) return;
+      onToggleTip(null);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onToggleTip(null);
+    };
+    // The panel is anchored to a measured position, so it follows nothing once
+    // the page moves underneath it.
+    const dismiss = () => onToggleTip(null);
+
+    document.addEventListener('pointerdown', onPointerDown);
+    document.addEventListener('keydown', onKey);
+    window.addEventListener('scroll', dismiss, true);
+    window.addEventListener('resize', dismiss);
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown);
+      document.removeEventListener('keydown', onKey);
+      window.removeEventListener('scroll', dismiss, true);
+      window.removeEventListener('resize', dismiss);
+    };
+  }, [open, onToggleTip]);
+
+  return (
+    <>
+      <button
+        ref={btnRef}
+        onClick={() => onToggleTip(tipId)}
+        // 16px glyph, but a comfortable tap target around it.
+        className="absolute top-2.5 right-2.5 p-1.5 -m-1.5 leading-none"
+        aria-label={`What ${label} means`}
+        aria-expanded={open}
+      >
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden>
+          <circle cx="8" cy="8" r="7" stroke={C.blue} strokeWidth="1.25" fill="none" />
+          <circle cx="8" cy="4.6" r="0.9" fill={C.blue} />
+          <path d="M8 7.1v4.6" stroke={C.blue} strokeWidth="1.5" strokeLinecap="round" />
+        </svg>
+      </button>
+
+      {open && anchor ? (
+        <div
+          ref={panelRef}
+          role="tooltip"
+          className="fixed z-50 rounded-xl bg-white p-4"
+          style={{
+            left: anchor.left,
+            top: anchor.top,
+            bottom: anchor.bottom,
+            width: anchor.width,
+            border: `1px solid ${C.mist}`,
+            boxShadow: '0 8px 24px rgba(57,57,57,0.12)',
+            animation: 'fade-in 0.16s ease-out',
+          }}
+        >
+          <div
+            className="text-[11px] uppercase tracking-[0.14em] font-medium mb-1.5"
+            style={{ color: C.blue }}
+          >
+            {label}
+          </div>
+          <p className="text-[13px] leading-relaxed" style={{ color: C.charcoal, opacity: 0.78 }}>
+            {METRIC_TIPS[tipId]}
+          </p>
+        </div>
+      ) : null}
+    </>
+  );
+}
+
 function MetricCard({
   label,
   value,
   unit,
   note,
   accent,
+  tipId,
+  openTip,
+  onToggleTip,
 }: {
   label: string;
   value: string;
   unit?: string;
   note: string;
   accent?: string;
+  tipId: string;
+  openTip: string | null;
+  onToggleTip: (id: string | null) => void;
 }) {
   return (
-    <div className="rounded-xl bg-white p-5 border" style={{ borderColor: C.mist }}>
-      <div className="text-[11px] uppercase tracking-[0.14em] font-medium" style={{ color: C.blue }}>
+    <div className="relative rounded-xl bg-white p-5 border" style={{ borderColor: C.mist }}>
+      <InfoTip tipId={tipId} label={label} openTip={openTip} onToggleTip={onToggleTip} />
+      <div
+        className="text-[11px] uppercase tracking-[0.14em] font-medium pr-6"
+        style={{ color: C.blue }}
+      >
         {label}
       </div>
       <div className="mt-2 flex items-baseline gap-1">
@@ -613,6 +828,20 @@ export default function AssessmentPage() {
   // Abort
   const [confirmAbort, setConfirmAbort] = useState(false);
 
+  // Resume. resumePrompt holds a recovered session awaiting the participant's
+  // decision; resumeInfo carries the partial-segment offset into the intro screen.
+  const [resumePrompt, setResumePrompt] = useState<SessionState | null>(null);
+  const [resumeInfo, setResumeInfo] = useState<{ section: 'resting' | 'rf'; carryMs: number } | null>(
+    null
+  );
+  const [resumedFromSave, setResumedFromSave] = useState(false);
+
+  // Which metric tooltip is open, if any. Held here so opening one closes the rest.
+  const [openTip, setOpenTip] = useState<string | null>(null);
+  const toggleTip = useCallback((id: string | null) => {
+    setOpenTip((prev) => (id === null ? null : prev === id ? null : id));
+  }, []);
+
   const restingMs = fastMode ? 25_000 : RESTING_MS;
   const rfSegmentMs = fastMode ? 15_000 : RF_SEGMENT_MS;
 
@@ -645,6 +874,24 @@ export default function AssessmentPage() {
     })();
   }, []);
 
+  // ----- recover an interrupted assessment -----
+  // Anything older than SESSION_MAX_AGE_MS is dropped inside loadSession without
+  // ever being offered, so the participant is only asked about usable sessions.
+  useEffect(() => {
+    let cancelled = false;
+    const params = new URLSearchParams(window.location.search);
+    const token = params.get('token') || params.get('jwt');
+
+    (async () => {
+      const saved = await loadSession(token);
+      if (!cancelled && saved) setResumePrompt(saved);
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   // handleDisconnect fires from a BLE event, so it reads the phase off a ref
   // rather than closing over stale state.
   const phaseRef = useRef<Phase>('connect');
@@ -661,6 +908,85 @@ export default function AssessmentPage() {
     },
     []
   );
+
+  // ----- session autosave -----
+  const currentElapsedMs = useCallback(() => {
+    if (pausedRef.current !== null) return pausedRef.current;
+    if (!segStartRef.current) return 0;
+    return Date.now() - segStartRef.current;
+  }, []);
+
+  const buildSession = useCallback(
+    (): SessionState => ({
+      version: 1,
+      savedAt: Date.now(),
+      phase:
+        resumeInfo?.section === 'resting'
+          ? 'resting'
+          : resumeInfo?.section === 'rf'
+            ? 'rf'
+            : phase,
+      checks,
+      name,
+      assessmentNumber,
+      participantId,
+      connMode,
+      restingRR: restingRRRef.current,
+      restingElapsedMs:
+        phase === 'resting'
+          ? currentElapsedMs()
+          : resumeInfo?.section === 'resting'
+            ? resumeInfo.carryMs
+            : 0,
+      restingMetrics,
+      rfIndex,
+      rfSegments,
+      rfRR: rfRRRef.current,
+      rfElapsedMs:
+        phase === 'rf'
+          ? currentElapsedMs()
+          : resumeInfo?.section === 'rf'
+            ? resumeInfo.carryMs
+            : 0,
+    }),
+    [
+      phase,
+      checks,
+      name,
+      assessmentNumber,
+      participantId,
+      connMode,
+      restingMetrics,
+      rfIndex,
+      rfSegments,
+      resumeInfo,
+      currentElapsedMs,
+    ]
+  );
+
+  // Read through a ref so the save effects below can fire on phase changes alone
+  // without re-subscribing every time any piece of state moves.
+  const buildSessionRef = useRef(buildSession);
+  useEffect(() => {
+    buildSessionRef.current = buildSession;
+  });
+
+  const persist = useCallback(() => {
+    saveSession(buildSessionRef.current(), accessToken);
+  }, [accessToken]);
+
+  // Save on every phase transition (and on each RF rate change).
+  useEffect(() => {
+    if (!ACTIVE_PHASES.includes(phase)) return;
+    persist();
+  }, [phase, rfIndex, persist]);
+
+  // ...and every 30s while a recording is actually running.
+  useEffect(() => {
+    if (phase !== 'resting' && phase !== 'rf') return;
+    const id = setInterval(persist, 30_000);
+    return () => clearInterval(id);
+  }, [phase, rfIndex, persist]);
 
   const showToast = useCallback((text: string) => {
     setToast(text);
@@ -716,6 +1042,7 @@ export default function AssessmentPage() {
       pausedRef.current = null;
     }
 
+    setResumedFromSave(false);
     bell();
     showToast(wasPaused ? 'Reconnected — recording resumed' : 'Reconnected');
   }, [showToast]);
@@ -802,16 +1129,28 @@ export default function AssessmentPage() {
 
   // ===== PHASE TRANSITIONS =====
 
-  const startResting = useCallback(() => {
-    restingRRRef.current = [];
-    collectorRef.current = restingRRRef.current;
-    segStartRef.current = Date.now();
-    segDoneRef.current = false;
-    setElapsed(0);
-    setPhase('resting');
-    bell();
-    speak('Close your eyes and breathe naturally. Recording begins now.');
-  }, []);
+  // carryMs > 0 means we are picking a partial segment back up: keep the RR
+  // already collected and only record the time that is left.
+  const startResting = useCallback(
+    (carryMs = 0) => {
+      const carry = Math.max(0, Math.min(carryMs, restingMs));
+      if (carry === 0) restingRRRef.current = [];
+      collectorRef.current = restingRRRef.current;
+      segStartRef.current = Date.now() - carry;
+      segDoneRef.current = false;
+      pausedRef.current = null;
+      setElapsed(carry);
+      setResumeInfo(null);
+      setPhase('resting');
+      bell();
+      speak(
+        carry > 0
+          ? 'Close your eyes and breathe naturally. Recording resumes now.'
+          : 'Close your eyes and breathe naturally. Recording begins now.'
+      );
+    },
+    [restingMs]
+  );
 
   const finishResting = useCallback(() => {
     collectorRef.current = null;
@@ -821,19 +1160,25 @@ export default function AssessmentPage() {
     speak('Recording complete. You may open your eyes.');
   }, []);
 
-  const startRFSegment = useCallback((index: number) => {
-    rfRRRef.current[index] = [];
-    collectorRef.current = rfRRRef.current[index];
-    segStartRef.current = Date.now();
-    segDoneRef.current = false;
-    setElapsed(0);
-    setRfIndex(index);
-    setPhase('rf');
-    bell();
-    speak(
-      `Breathe at ${RF_RATES[index].toFixed(1)} breaths per minute. Follow the circle. Inhale as it grows, exhale as it settles.`
-    );
-  }, []);
+  const startRFSegment = useCallback(
+    (index: number, carryMs = 0) => {
+      const carry = Math.max(0, Math.min(carryMs, rfSegmentMs));
+      if (carry === 0) rfRRRef.current[index] = [];
+      collectorRef.current = rfRRRef.current[index];
+      segStartRef.current = Date.now() - carry;
+      segDoneRef.current = false;
+      pausedRef.current = null;
+      setElapsed(carry);
+      setRfIndex(index);
+      setResumeInfo(null);
+      setPhase('rf');
+      bell();
+      speak(
+        `Breathe at ${RF_RATES[index].toFixed(1)} breaths per minute. Follow the circle. Inhale as it grows, exhale as it settles.`
+      );
+    },
+    [rfSegmentMs]
+  );
 
   const startRF = useCallback(() => {
     rfRRRef.current = RF_RATES.map(() => []);
@@ -880,6 +1225,7 @@ export default function AssessmentPage() {
   // ===== ABORT / RESTART =====
   const abort = useCallback(() => {
     cancelSpeech();
+    clearSession(accessToken);
     collectorRef.current = null;
     restingRRRef.current = [];
     rfRRRef.current = RF_RATES.map(() => []);
@@ -897,8 +1243,57 @@ export default function AssessmentPage() {
     setRfIndex(0);
     setTrace([]);
     setSaveError(null);
+    setResumeInfo(null);
+    setResumePrompt(null);
+    setResumedFromSave(false);
     setPhase('connect');
+  }, [accessToken]);
+
+  // ===== RESUME =====
+  // Never auto-start a timer: a resumed recording lands on the intro screen so the
+  // participant can get the armband back on before pressing Start.
+  const applyResume = useCallback((saved: SessionState) => {
+    setName(saved.name);
+    setAssessmentNumber(saved.assessmentNumber);
+    setParticipantId(saved.participantId);
+    setChecks(saved.checks ?? [false, false, false, false]);
+    setRestingMetrics(saved.restingMetrics);
+    setRfSegments(saved.rfSegments);
+    setRfIndex(saved.rfIndex);
+
+    restingRRRef.current = saved.restingRR || [];
+    rfRRRef.current = RF_RATES.map((_, i) => saved.rfRR?.[i] ?? []);
+
+    collectorRef.current = null;
+    pausedRef.current = null;
+    segDoneRef.current = true;
+    setElapsed(0);
+    setTrace([]);
+
+    if (saved.phase === 'resting') {
+      setResumeInfo({ section: 'resting', carryMs: saved.restingElapsedMs });
+      setPhase('resting-intro');
+    } else if (saved.phase === 'rf') {
+      setResumeInfo({ section: 'rf', carryMs: saved.rfElapsedMs });
+      setPhase('rf-intro');
+    } else {
+      setResumeInfo(null);
+      setPhase(saved.phase as Phase);
+    }
+
+    setResumePrompt(null);
+    setResumedFromSave(true);
+
+    // No armband after a page load, so reuse the reconnect overlay to get one back —
+    // except at rf-done, which only needs the Save button and would otherwise trap
+    // the participant behind a demand they cannot dismiss.
+    setShowDisconnectOverlay(saved.phase !== 'rf-done');
   }, []);
+
+  const discardResume = useCallback(() => {
+    clearSession(accessToken);
+    setResumePrompt(null);
+  }, [accessToken]);
 
   // ===== RESULTS =====
   const resonance = useMemo(() => pickResonance(rfSegments), [rfSegments]);
@@ -967,6 +1362,9 @@ export default function AssessmentPage() {
       console.log('[capacity-assessment] nr_assessment_results payload', payload);
       await new Promise((r) => setTimeout(r, 600));
 
+      // Finished and saved — the draft is no longer needed on any device.
+      clearSession(accessToken);
+
       // Nothing left to record — release the armband and its wake lock.
       disconnectRef.current?.();
       disconnectRef.current = null;
@@ -980,6 +1378,7 @@ export default function AssessmentPage() {
       setSaving(false);
     }
   }, [
+    accessToken,
     participantId,
     name,
     assessmentNumber,
@@ -1207,7 +1606,24 @@ export default function AssessmentPage() {
               A bell sounds when the recording begins and two bells when it is finished. There is
               nothing to watch, so let the screen go.
             </p>
-            <PrimaryButton onClick={startResting}>Start resting measurement</PrimaryButton>
+            {resumeInfo?.section === 'resting' ? (
+              <p
+                className="text-xs leading-relaxed mb-5 rounded-xl px-4 py-3"
+                style={{ background: `${C.blue}0d`, color: C.indigo }}
+              >
+                Picking up where you left off — {formatTime(restingMs - resumeInfo.carryMs)} left to
+                record. The {restingRRRef.current.length} heartbeats already captured are kept.
+              </p>
+            ) : null}
+            <PrimaryButton
+              onClick={() =>
+                startResting(resumeInfo?.section === 'resting' ? resumeInfo.carryMs : 0)
+              }
+            >
+              {resumeInfo?.section === 'resting'
+                ? 'Resume resting measurement'
+                : 'Start resting measurement'}
+            </PrimaryButton>
           </Panel>
         ) : null}
 
@@ -1311,7 +1727,31 @@ export default function AssessmentPage() {
               Breathe gently through your nose. If a rate feels like effort, breathe more softly
               rather than deeper. A bell and a voice announce each change.
             </p>
-            <PrimaryButton onClick={startRF}>Start breathing measurement</PrimaryButton>
+            {resumeInfo?.section === 'rf' ? (
+              <p
+                className="text-xs leading-relaxed mb-5 rounded-xl px-4 py-3"
+                style={{ background: `${C.blue}0d`, color: C.indigo }}
+              >
+                Picking up at {RF_RATES[rfIndex].toFixed(1)} breaths per minute — rate {rfIndex + 1}{' '}
+                of {RF_RATES.length}, {formatTime(rfSegmentMs - resumeInfo.carryMs)} left at this
+                rate.
+                {/* Only worth mentioning once at least one rate is actually banked. */}
+                {rfSegments.length > 0
+                  ? ` The ${rfSegments.length} rate${rfSegments.length === 1 ? '' : 's'} already finished ${
+                      rfSegments.length === 1 ? 'is' : 'are'
+                    } kept.`
+                  : ''}
+              </p>
+            ) : null}
+            <PrimaryButton
+              onClick={() =>
+                resumeInfo?.section === 'rf' ? startRFSegment(rfIndex, resumeInfo.carryMs) : startRF()
+              }
+            >
+              {resumeInfo?.section === 'rf'
+                ? 'Resume breathing measurement'
+                : 'Start breathing measurement'}
+            </PrimaryButton>
           </Panel>
         ) : null}
 
@@ -1449,6 +1889,9 @@ export default function AssessmentPage() {
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-8">
               <MetricCard
                 label="Recovery Index"
+                tipId="recovery"
+                openTip={openTip}
+                onToggleTip={toggleTip}
                 value={String(recovery)}
                 unit="/ 100"
                 accent={level.color}
@@ -1456,29 +1899,44 @@ export default function AssessmentPage() {
               />
               <MetricCard
                 label="Heart Rate"
+                tipId="heartRate"
+                openTip={openTip}
+                onToggleTip={toggleTip}
                 value={restingMetrics ? String(Math.round(restingMetrics.meanHR)) : '—'}
                 unit="bpm"
                 note="Your resting pace — the baseline cost of running your system right now."
               />
               <MetricCard
                 label="Breath Rate"
+                tipId="breathRate"
+                openTip={openTip}
+                onToggleTip={toggleTip}
                 value={restingMetrics ? restingMetrics.breathRate.toFixed(1) : '—'}
                 unit="br/min"
                 note="How fast you breathe when nothing is being asked of you."
               />
               <MetricCard
                 label="Coherence"
+                tipId="coherence"
+                openTip={openTip}
+                onToggleTip={toggleTip}
                 value={restingMetrics ? restingMetrics.coherence.toFixed(0) : '—'}
                 unit="%"
                 note="How closely your heart rhythm and your breath moved together at rest."
               />
               <MetricCard
                 label="Complexity"
+                tipId="complexity"
+                openTip={openTip}
+                onToggleTip={toggleTip}
                 value={restingMetrics ? restingMetrics.sampEn.toFixed(2) : '—'}
                 note="The adaptive range in your signal — room to respond to whatever comes next."
               />
               <MetricCard
                 label="Resonance"
+                tipId="resonance"
+                openTip={openTip}
+                onToggleTip={toggleTip}
                 value={resonance.rate.toFixed(1)}
                 unit="br/min"
                 note="The breath rate your system amplifies most. This is where to practise."
@@ -1528,6 +1986,15 @@ export default function AssessmentPage() {
         ) : null}
       </main>
 
+      {/* ===== RESUME PROMPT ===== */}
+      {resumePrompt ? (
+        <ResumeOverlay
+          savedAt={resumePrompt.savedAt}
+          onResume={() => applyResume(resumePrompt)}
+          onStartOver={discardResume}
+        />
+      ) : null}
+
       {/* ===== BLE SEARCH OVERLAY ===== */}
       {blePrompt ? <BleSearchOverlay /> : null}
 
@@ -1535,6 +2002,7 @@ export default function AssessmentPage() {
       {showDisconnectOverlay ? (
         <DisconnectOverlay
           paused={pausedRef.current !== null}
+          resumed={resumedFromSave}
           reconnecting={reconnecting}
           error={reconnectError}
           onReconnect={reconnect}
