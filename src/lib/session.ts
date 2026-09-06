@@ -33,10 +33,10 @@ export interface SessionState {
   phase: string;
   checks: boolean[];
 
-  // Who they are
+  // Who they are, as supplied by the platform at launch. The assessment never
+  // establishes identity itself.
   name: string;
   assessmentNumber: number;
-  participantId: string | null;
   connMode: 'ble' | 'sim' | null;
 
   // Resting block. elapsed, never remaining — so the value does not depend on
@@ -126,7 +126,9 @@ export async function saveRemoteSession(
 ): Promise<void> {
   // const client = createSupabaseClient(accessToken);
   // await client.from('nr_assessment_sessions').upsert({
-  //   participant_id: state.participantId,
+  //   // From the authenticated caller — the assessment app carries no identity
+  //   // of its own, so the draft cannot supply one.
+  //   participant_id: <from JWT>,
   //   assessment_number: state.assessmentNumber,
   //   state,
   //   saved_at: new Date(state.savedAt).toISOString(),

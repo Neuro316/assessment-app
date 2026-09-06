@@ -6,7 +6,12 @@
 //   connect -> checklist -> resting intro -> resting (5 min)
 //   -> resting done -> rf intro -> rf (6 rates x 2 min) -> rf done -> complete
 //
-// Launch params (URL): ?token=<supabase jwt>&name=<participant>&assessment=<n>
+// The app is a data collection instrument only. It records biometrics, computes
+// metrics, and hands them to the embedding platform via postMessage. It stores
+// nothing itself beyond a local crash-recovery draft.
+//
+// Launch params (URL): ?embedded=true&name=<participant>&attempt=<n>&phase=<pre|post>
+// Without embedded=true the assessment does not render at all — see GateScreen.
 // Dev flag: ?fast=1 shortens every recording segment so the flow can be walked in ~2 min.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -33,7 +38,6 @@ import {
 } from '@/lib/bluetooth';
 import { computeAllMetrics, type HRVMetrics } from '@/lib/hrv-metrics';
 import { bell, cancelAudio, doubleBell, playAudio } from '@/lib/audio';
-import { createSupabaseClient, getParticipant } from '@/lib/supabase';
 import {
   clearSession,
   formatSavedAt,
@@ -75,8 +79,11 @@ const AUDIO = {
 };
 
 const PLATFORM_URL = process.env.NEXT_PUBLIC_PLATFORM_URL || 'https://university.neuroprogeny.com';
-const COACHING_URL = process.env.NEXT_PUBLIC_COACHING_URL || 'https://neuroprogeny.com/coaching';
-const PROMO_CODE = 'CAPACITY';
+
+// Caps on what rides in the postMessage. A 20 minute recording is well under
+// these, but a runaway buffer must not produce a message the parent cannot handle.
+const MAX_RESTING_RR = 2000;
+const MAX_RF_RR_PER_RATE = 500;
 
 type Phase =
   | 'connect'
@@ -771,6 +778,40 @@ function PrimaryButton({
   );
 }
 
+// Shown to anyone who reaches the app outside the University. It is the entire
+// page: no assessment state is created and nothing else renders behind it.
+function GateScreen() {
+  return (
+    <div
+      className="min-h-screen flex flex-col items-center justify-center px-6"
+      style={{ background: C.pale, color: C.charcoal }}
+    >
+      <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke={C.blue} strokeWidth="1.75">
+        <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z" />
+      </svg>
+
+      <h1 className="text-2xl font-semibold mt-7 mb-3 text-center" style={{ color: C.indigo }}>
+        Capacity Assessment
+      </h1>
+      <p
+        className="text-sm text-center max-w-sm leading-relaxed mb-9"
+        style={{ color: C.charcoal, opacity: 0.7 }}
+      >
+        This assessment is available through Neuro Progeny University. If you have purchased this
+        assessment, log in to your University account and open it from your program.
+      </p>
+
+      <a
+        href={PLATFORM_URL}
+        className="rounded-xl px-7 py-4 text-white text-sm font-semibold tracking-wide"
+        style={{ background: C.blue }}
+      >
+        Go to Neuro Progeny University
+      </a>
+    </div>
+  );
+}
+
 function Panel({ children }: { children: React.ReactNode }) {
   return (
     <div
@@ -794,9 +835,11 @@ const CHECKLIST: [string, string][] = [
 export default function AssessmentPage() {
   const [phase, setPhase] = useState<Phase>('connect');
   const [name, setName] = useState('');
-  const [accessToken, setAccessToken] = useState<string | null>(null);
-  const [participantId, setParticipantId] = useState<string | null>(null);
+  // null while the launch params are still being read, so the assessment never
+  // flashes on screen before the gate has had a chance to block it.
+  const [embedded, setEmbedded] = useState<boolean | null>(null);
   const [assessmentNumber, setAssessmentNumber] = useState(1);
+  const [journeyPhase, setJourneyPhase] = useState<string | null>(null);
   const [fastMode, setFastMode] = useState(false);
 
   // Device
@@ -875,48 +918,38 @@ export default function AssessmentPage() {
   useEffect(() => {
     setBleSupported(isBLESupported());
     const params = new URLSearchParams(window.location.search);
-    const token = params.get('token') || params.get('jwt');
+
+    // Everything downstream hangs off this. The participant is authenticated by
+    // the University; the assessment itself never asks who anyone is.
+    const isEmbedded = params.get('embedded') === 'true';
+    setEmbedded(isEmbedded);
+    if (!isEmbedded) return;
+
     const nameParam = params.get('name');
-    const n = Number(params.get('assessment'));
+    const n = Number(params.get('attempt'));
 
     if (nameParam) setName(nameParam);
     if (Number.isFinite(n) && n > 0) setAssessmentNumber(n);
+    setJourneyPhase(params.get('phase'));
     if (params.get('fast') === '1') setFastMode(true);
-    if (!token) return;
-
-    setAccessToken(token);
-    // The participant is already authenticated on the NPU platform; their JWT rides in.
-    (async () => {
-      try {
-        const client = createSupabaseClient(token);
-        const p = await getParticipant(client);
-        if (p) {
-          setParticipantId(p.id);
-          setName((prev) => prev || p.name);
-        }
-      } catch {
-        // Falls back to the manual name field.
-      }
-    })();
   }, []);
 
   // ----- recover an interrupted assessment -----
   // Anything older than SESSION_MAX_AGE_MS is dropped inside loadSession without
   // ever being offered, so the participant is only asked about usable sessions.
   useEffect(() => {
+    if (embedded !== true) return;
     let cancelled = false;
-    const params = new URLSearchParams(window.location.search);
-    const token = params.get('token') || params.get('jwt');
 
     (async () => {
-      const saved = await loadSession(token);
+      const saved = await loadSession();
       if (!cancelled && saved) setResumePrompt(saved);
     })();
 
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [embedded]);
 
   // handleDisconnect fires from a BLE event, so it reads the phase off a ref
   // rather than closing over stale state.
@@ -955,7 +988,6 @@ export default function AssessmentPage() {
       checks,
       name,
       assessmentNumber,
-      participantId,
       connMode,
       restingRR: restingRRRef.current,
       restingElapsedMs:
@@ -980,7 +1012,6 @@ export default function AssessmentPage() {
       checks,
       name,
       assessmentNumber,
-      participantId,
       connMode,
       restingMetrics,
       rfIndex,
@@ -998,8 +1029,8 @@ export default function AssessmentPage() {
   });
 
   const persist = useCallback(() => {
-    saveSession(buildSessionRef.current(), accessToken);
-  }, [accessToken]);
+    saveSession(buildSessionRef.current());
+  }, []);
 
   // Save on every phase transition (and on each RF rate change).
   useEffect(() => {
@@ -1296,7 +1327,7 @@ export default function AssessmentPage() {
   const abort = useCallback(() => {
     cancelAudio();
     runGenerationRef.current += 1;
-    clearSession(accessToken);
+    clearSession();
     collectorRef.current = null;
     restingRRRef.current = [];
     rfRRRef.current = RF_RATES.map(() => []);
@@ -1318,7 +1349,7 @@ export default function AssessmentPage() {
     setResumePrompt(null);
     setResumedFromSave(false);
     setPhase('connect');
-  }, [accessToken]);
+  }, []);
 
   // ===== RESUME =====
   // Never auto-start a timer: a resumed recording lands on the intro screen so the
@@ -1326,7 +1357,6 @@ export default function AssessmentPage() {
   const applyResume = useCallback((saved: SessionState) => {
     setName(saved.name);
     setAssessmentNumber(saved.assessmentNumber);
-    setParticipantId(saved.participantId);
     setChecks(saved.checks ?? [false, false, false, false]);
     setRestingMetrics(saved.restingMetrics);
     setRfSegments(saved.rfSegments);
@@ -1362,9 +1392,9 @@ export default function AssessmentPage() {
   }, []);
 
   const discardResume = useCallback(() => {
-    clearSession(accessToken);
+    clearSession();
     setResumePrompt(null);
-  }, [accessToken]);
+  }, []);
 
   // ===== RESULTS =====
   const resonance = useMemo(() => pickResonance(rfSegments), [rfSegments]);
@@ -1388,53 +1418,69 @@ export default function AssessmentPage() {
     setSaving(true);
     setSaveError(null);
 
-    const payload = {
-      participant_id: participantId,
-      participant_name: name.trim() || 'Participant',
-      assessment_number: assessmentNumber,
-      recorded_at: new Date().toISOString(),
-      device_mode: connMode,
-      simulated: connMode === 'sim',
+    const m = restingMetrics;
 
-      // Resting block
-      resting_metrics: restingMetrics,
-      resting_rr_intervals: restingRRRef.current,
-      resting_duration_ms: restingMs,
-
-      // Resonance frequency block
-      rf_segments: rfSegments.map((s, i) => ({
-        rate: s.rate,
-        rr_count: s.rrCount,
-        metrics: s.metrics,
-        resonance_score: Math.round((resonance.scores[i] ?? 0) * 1000) / 1000,
-      })),
-      rf_segment_duration_ms: rfSegmentMs,
-      resonance_frequency: resonance.rate,
-
-      // Headline summary
-      recovery_index: recovery,
-      capacity_level: level.key,
-      capacity_label: level.label,
-      heart_rate: restingMetrics?.meanHR ?? null,
-      breath_rate: restingMetrics?.breathRate ?? null,
-      coherence: restingMetrics?.coherence ?? null,
-      complexity: restingMetrics?.sampEn ?? null,
+    // Everything the platform needs to write the result and redraw the journey.
+    // The assessment stores none of this itself.
+    const message = {
+      type: 'assessment-complete',
+      metrics: {
+        recoveryIndex: recovery,
+        rmssd: m?.rmssd ?? null,
+        sdnn: m?.sdnn ?? null,
+        pnn50: m?.pnn50 ?? null,
+        nn50: m?.nn50 ?? null,
+        meanHR: m?.meanHR ?? null,
+        meanRR: m?.meanRR ?? null,
+        totalPower: m?.totalPower ?? null,
+        lfPower: m?.lfPower ?? null,
+        hfPower: m?.hfPower ?? null,
+        vlfPower: m?.vlfPower ?? null,
+        lfHfRatio: m?.lfHfRatio ?? null,
+        lfNu: m?.lfNu ?? null,
+        hfNu: m?.hfNu ?? null,
+        breathRate: m?.breathRate ?? null,
+        sampEn: m?.sampEn ?? null,
+        dfaA1: m?.dfaA1 ?? null,
+        coherence: m?.coherence ?? null,
+        stressIdx: m?.stressIdx ?? null,
+        resonanceFreq: resonance.rate,
+      },
+      rawData: {
+        // Capped so a runaway buffer cannot produce a message the parent chokes on.
+        resting_rr: restingRRRef.current.slice(0, MAX_RESTING_RR),
+        rf_results: rfSegments.map((seg, i) => ({
+          rate: seg.rate,
+          amplitude: seg.metrics?.sdnn ?? null,
+          coherence: seg.metrics?.coherence ?? null,
+          rmssd: seg.metrics?.rmssd ?? null,
+          rr_count: seg.rrCount,
+          resonance_score: Math.round((resonance.scores[i] ?? 0) * 1000) / 1000,
+        })),
+        rf_rr_per_rate: rfRRRef.current.map((rr) => rr.slice(0, MAX_RF_RR_PER_RATE)),
+        resonance_freq: resonance.rate,
+        device_mode: connMode,
+        // Time actually recorded, not wall clock — a paused or resumed run must
+        // not inflate this.
+        recording_duration_ms: restingMs + rfSegments.length * rfSegmentMs,
+        // Echoed back so the platform's submit route does not have to correlate
+        // the result with the launch it came from.
+        attempt: assessmentNumber,
+        phase: journeyPhase,
+        capacity_level: level.key,
+        capacity_label: level.label,
+      },
     };
 
     try {
-      // TODO: the nr_assessment_results migration has not been run yet.
-      // Once the table exists, enable the write below and drop the console log.
-      //
-      // const client = createSupabaseClient(accessToken ?? undefined);
-      // const { error } = await client.from('nr_assessment_results').insert(payload);
-      // if (error) throw error;
-
-      // eslint-disable-next-line no-console
-      console.log('[capacity-assessment] nr_assessment_results payload', payload);
+      // '*' is deliberate: the assessment does not know the platform's origin, and
+      // the parent validates the sender on its end. Who may embed this app at all
+      // is constrained by the frame-ancestors CSP in next.config.js.
+      window.parent.postMessage(message, '*');
       await new Promise((r) => setTimeout(r, 600));
 
       // Finished and saved — the draft is no longer needed on any device.
-      clearSession(accessToken);
+      clearSession();
 
       // Nothing left to record — release the armband and its wake lock.
       disconnectRef.current?.();
@@ -1445,15 +1491,15 @@ export default function AssessmentPage() {
       setPhase('complete');
       playAudio(AUDIO.assessmentComplete);
     } catch (e: any) {
-      setSaveError(e?.message || 'Could not save your results. Your assessment is still on screen.');
+      setSaveError(
+        e?.message || 'Could not hand your results to the University. Your assessment is still on screen.'
+      );
     } finally {
       setSaving(false);
     }
   }, [
-    accessToken,
-    participantId,
-    name,
     assessmentNumber,
+    journeyPhase,
     connMode,
     restingMetrics,
     restingMs,
@@ -1465,8 +1511,13 @@ export default function AssessmentPage() {
   ]);
 
   // ===== RENDER =====
+  // Nothing renders until the launch params have been read, so the assessment
+  // cannot flash on screen ahead of the gate.
+  if (embedded === null) return <div className="min-h-screen" style={{ background: C.pale }} />;
+  if (!embedded) return <GateScreen />;
+
   const showAbort = ACTIVE_PHASES.includes(phase);
-  const canStart = name.trim().length > 0 && connState === 'connected';
+  const canStart = connState === 'connected';
   const allChecked = checks.every(Boolean);
 
   return (
@@ -1511,25 +1562,20 @@ export default function AssessmentPage() {
         {/* ===== 1. CONNECT ===== */}
         {phase === 'connect' ? (
           <Panel>
+            <p
+              className="text-[11px] uppercase tracking-[0.14em] font-medium mb-2"
+              style={{ color: C.blue }}
+            >
+              Assessment {assessmentNumber}
+            </p>
             <h1 className="text-2xl font-semibold mb-2" style={{ color: C.indigo }}>
-              Welcome
+              {name ? `Welcome, ${name}` : 'Welcome'}
             </h1>
             <p className="text-sm leading-relaxed mb-6" style={{ opacity: 0.72 }}>
               This is a twenty minute measurement of how your nervous system is currently allocating
               its resources. You will rest quietly for five minutes, then breathe along with a circle
               at six different rates. Find somewhere you will not be interrupted.
             </p>
-
-            <label className="block text-xs font-medium mb-2" style={{ color: C.indigo }}>
-              Your name
-            </label>
-            <input
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="First name"
-              className="w-full rounded-xl border px-4 py-3 text-sm mb-6 outline-none"
-              style={{ borderColor: C.mist, background: C.pale }}
-            />
 
             <div className="space-y-3 mb-6">
               <button
@@ -1962,13 +2008,23 @@ export default function AssessmentPage() {
         {/* ===== 9. COMPLETE ===== */}
         {phase === 'complete' ? (
           <div className="w-full max-w-2xl mx-auto" style={{ animation: 'fade-in 0.5s ease-out' }}>
-            <div className="text-center mb-8">
-              <p className="text-xs uppercase tracking-[0.28em] mb-2" style={{ color: C.blue, opacity: 0.7 }}>
-                Assessment complete
-              </p>
+            <div className="flex flex-col items-center text-center mb-8">
+              <span
+                className="flex items-center justify-center rounded-full mb-5"
+                style={{ width: 56, height: 56, background: `${C.green}1f` }}
+              >
+                <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke={C.green} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="20 6 9 17 4 12" />
+                </svg>
+              </span>
               <h2 className="text-2xl font-semibold" style={{ color: C.indigo }}>
-                {name.trim() ? `Here is your reading, ${name.trim()}` : 'Here is your reading'}
+                Assessment Complete
               </h2>
+              {name.trim() ? (
+                <p className="text-sm mt-2" style={{ opacity: 0.6 }}>
+                  Well done, {name.trim()}.
+                </p>
+              ) : null}
             </div>
 
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-8">
@@ -2040,33 +2096,11 @@ export default function AssessmentPage() {
               </p>
             </div>
 
-            <div className="rounded-2xl p-7 mb-6" style={{ background: C.indigo, color: '#fff' }}>
-              <h3 className="text-lg font-semibold mb-2">Talk it through</h3>
-              <p className="text-sm leading-relaxed mb-5" style={{ opacity: 0.82 }}>
-                A coaching call turns these numbers into a plan — what your system is protecting, and
-                the smallest change that gives it room to reinvest. Use code <strong>{PROMO_CODE}</strong>{' '}
-                when you book.
-              </p>
-              <a
-                href={`${COACHING_URL}?promo=${PROMO_CODE}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-block rounded-xl px-6 py-3.5 text-sm font-semibold"
-                style={{ background: '#fff', color: C.indigo }}
-              >
-                Book a coaching call
-              </a>
-            </div>
-
-            <div className="text-center">
-              <a
-                href={PLATFORM_URL}
-                className="text-sm font-medium underline underline-offset-4"
-                style={{ color: C.blue }}
-              >
-                Return to University
-              </a>
-            </div>
+            {/* The participant is already inside the University, so there is nowhere
+                to send them and nothing to sell here. */}
+            <p className="text-center text-sm" style={{ opacity: 0.62 }}>
+              Your results have been saved to your journey.
+            </p>
           </div>
         ) : null}
       </main>
