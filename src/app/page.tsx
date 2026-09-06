@@ -786,9 +786,15 @@ function GateScreen() {
       className="min-h-screen flex flex-col items-center justify-center px-6"
       style={{ background: C.pale, color: C.charcoal }}
     >
-      <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke={C.blue} strokeWidth="1.75">
-        <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z" />
-      </svg>
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src="/neuroprogeny-logo.png"
+        alt="Neuro Progeny"
+        // The supplied PNG has a white background rather than transparency;
+        // multiply drops it out against the pale ground. A transparent export
+        // would let this style go.
+        style={{ width: 200, height: 62, objectFit: 'cover', mixBlendMode: 'multiply' }}
+      />
 
       <h1 className="text-2xl font-semibold mt-7 mb-3 text-center" style={{ color: C.indigo }}>
         Capacity Assessment
@@ -1528,13 +1534,13 @@ export default function AssessmentPage() {
         style={{ borderColor: C.mist, background: 'rgba(240,244,248,0.86)' }}
       >
         <div className="max-w-3xl mx-auto px-5 h-14 flex items-center justify-between">
-          <div className="flex items-center gap-2.5">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={C.blue} strokeWidth="2">
-              <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z" />
-            </svg>
-            <span className="text-sm font-semibold" style={{ color: C.indigo }}>
-              Capacity Assessment
-            </span>
+          <div className="flex items-center">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src="/neuroprogeny-logo.png"
+              alt="Neuro Progeny"
+              style={{ width: 140, height: 44, objectFit: 'cover', mixBlendMode: 'multiply' }}
+            />
           </div>
 
           <div className="flex items-center gap-4">

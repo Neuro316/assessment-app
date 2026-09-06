@@ -98,6 +98,9 @@ export function clearLocalSession(): void {
 // LAYER 2 — SERVER (Supabase nr_assessment_sessions)
 // ===========================================================================
 // TODO: not built yet — the nr_assessment_sessions migration has not been run.
+// Note: the app no longer carries a Supabase client (src/lib/supabase.ts was
+// removed once the platform took over every write), so enabling this means
+// bringing @supabase/supabase-js back as a dependency.
 //
 // Shape when it lands:
 //   nr_assessment_sessions (
@@ -124,7 +127,7 @@ export async function saveRemoteSession(
   _state: SessionState,
   _accessToken: string
 ): Promise<void> {
-  // const client = createSupabaseClient(accessToken);
+  // const client = createClient(url, anonKey, { global: { headers: { Authorization: `Bearer ${accessToken}` } } });
   // await client.from('nr_assessment_sessions').upsert({
   //   // From the authenticated caller — the assessment app carries no identity
   //   // of its own, so the draft cannot supply one.
@@ -138,7 +141,7 @@ export async function saveRemoteSession(
 // TODO: select the most recent in-progress row for this participant and return
 // its `state` column, applying the same SESSION_MAX_AGE_MS staleness rule.
 export async function loadRemoteSession(_accessToken: string): Promise<SessionState | null> {
-  // const client = createSupabaseClient(accessToken);
+  // const client = createClient(url, anonKey, { global: { headers: { Authorization: `Bearer ${accessToken}` } } });
   // const { data } = await client.from('nr_assessment_sessions')
   //   .select('state, saved_at').order('saved_at', { ascending: false }).limit(1).single();
   // ...staleness check, then return data.state as SessionState
@@ -147,7 +150,7 @@ export async function loadRemoteSession(_accessToken: string): Promise<SessionSt
 
 // TODO: delete the draft row for this participant/assessment.
 export async function clearRemoteSession(_accessToken: string): Promise<void> {
-  // const client = createSupabaseClient(accessToken);
+  // const client = createClient(url, anonKey, { global: { headers: { Authorization: `Bearer ${accessToken}` } } });
   // await client.from('nr_assessment_sessions').delete().eq(...);
 }
 
