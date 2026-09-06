@@ -24,13 +24,15 @@ import {
 import {
   connectHW9,
   connectSimulated,
+  findPairedHW9,
   isBLESupported,
   reconnectHW9,
+  type ConnectStage,
   type HRConnection,
   type HRDataPoint,
 } from '@/lib/bluetooth';
 import { computeAllMetrics, type HRVMetrics } from '@/lib/hrv-metrics';
-import { bell, cancelSpeech, doubleBell, speak } from '@/lib/audio';
+import { bell, cancelAudio, doubleBell, playAudio } from '@/lib/audio';
 import { createSupabaseClient, getParticipant } from '@/lib/supabase';
 import {
   clearSession,
@@ -56,6 +58,21 @@ const C = {
 const RESTING_MS = 5 * 60 * 1000;
 const RF_SEGMENT_MS = 2 * 60 * 1000;
 const RF_RATES = [4.5, 5.0, 5.5, 6.0, 6.5, 7.0];
+
+// The recorded voice track in public/Audio, in protocol order. `rate` is indexed
+// by RF_RATES, so 6.mp3 is 4.5 br/min through 11.mp3 at 7.0.
+const AUDIO = {
+  welcome: '1.mp3',
+  checklist: '2.mp3',
+  restingStart: '3.mp3',
+  restingComplete: '4.mp3',
+  rfIntro: '5.mp3',
+  rate: ['6.mp3', '7.mp3', '8.mp3', '9.mp3', '10.mp3', '11.mp3'],
+  rateComplete: '12.mp3',
+  assessmentComplete: '13.mp3',
+  disconnected: '14.mp3',
+  reconnected: '15.mp3',
+};
 
 const PLATFORM_URL = process.env.NEXT_PUBLIC_PLATFORM_URL || 'https://university.neuroprogeny.com';
 const COACHING_URL = process.env.NEXT_PUBLIC_COACHING_URL || 'https://neuroprogeny.com/coaching';
@@ -292,7 +309,7 @@ function BreathPacer({ rate }: { rate: number }) {
 // Shown while Chrome's native device picker is being summoned, so the participant
 // sees branded UI -> a brief system dialog -> branded UI, rather than the system
 // dialog arriving out of nowhere over the welcome screen.
-function BleSearchOverlay() {
+function BleSearchOverlay({ stage }: { stage: ConnectStage }) {
   return (
     <div
       className="fixed inset-0 z-40 flex flex-col items-center justify-center px-6"
@@ -347,10 +364,14 @@ function BleSearchOverlay() {
       </div>
 
       <h2 className="text-xl font-semibold mb-2 text-center" style={{ color: C.indigo }}>
-        Searching for your HW9 armband…
+        {stage === 'reconnecting'
+          ? 'Reconnecting to your HW9 armband…'
+          : 'Searching for your HW9 armband…'}
       </h2>
       <p className="text-sm text-center max-w-xs leading-relaxed" style={{ opacity: 0.6 }}>
-        A system dialog will appear — select your HW9 device to continue.
+        {stage === 'reconnecting'
+          ? 'No dialog needed — this is the armband you paired before.'
+          : 'A system dialog will appear — select your HW9 device to continue.'}
       </p>
     </div>
   );
@@ -783,14 +804,16 @@ export default function AssessmentPage() {
   const [connMode, setConnMode] = useState<'ble' | 'sim' | null>(null);
   const [connNotice, setConnNotice] = useState<{ text: string; tone: 'error' | 'muted' } | null>(null);
   const [blePrompt, setBlePrompt] = useState(false);
+  const [bleStage, setBleStage] = useState<ConnectStage>('searching');
   const [bleSupported, setBleSupported] = useState(false);
   const [battery, setBattery] = useState<number | null>(null);
   const disconnectRef = useRef<(() => void) | null>(null);
   // Held so a reconnect can go straight back to the same strap, no picker.
   const deviceRef = useRef<HRConnection['device']>(null);
-  // Set once a silent reconnect to the known device has failed, so the next tap
-  // goes straight to the picker rather than burning the activation window again.
-  const directReconnectFailedRef = useRef(false);
+  // Set once a silent connect has failed — either reattaching to the in-session
+  // device or to one getDevices() remembered. The next tap then goes straight to
+  // the picker rather than burning the activation window on a slow retry.
+  const skipSilentConnectRef = useRef(false);
 
   // Disconnect / resume
   const [showDisconnectOverlay, setShowDisconnectOverlay] = useState(false);
@@ -814,6 +837,9 @@ export default function AssessmentPage() {
   const segStartRef = useRef(0);
   const segDoneRef = useRef(false);
   const pausedRef = useRef<number | null>(null);
+  // Bumped on restart. Anything resumed after an await must check it still matches,
+  // since cancelAudio settles pending clip promises rather than leaving them hanging.
+  const runGenerationRef = useRef(0);
   const [elapsed, setElapsed] = useState(0);
 
   // Results
@@ -902,7 +928,7 @@ export default function AssessmentPage() {
   // ----- teardown -----
   useEffect(
     () => () => {
-      cancelSpeech();
+      cancelAudio();
       disconnectRef.current?.();
       if (toastTimer.current) clearTimeout(toastTimer.current);
     },
@@ -1018,13 +1044,14 @@ export default function AssessmentPage() {
     if (p !== 'connect' && p !== 'complete') {
       setReconnectError(null);
       setShowDisconnectOverlay(true);
+      playAudio(AUDIO.disconnected);
     }
   }, []);
 
   const adoptConnection = useCallback((conn: HRConnection, mode: 'ble' | 'sim') => {
     disconnectRef.current = conn.disconnect;
     deviceRef.current = conn.device;
-    directReconnectFailedRef.current = false;
+    skipSilentConnectRef.current = false;
     setBattery(conn.battery);
     setConnMode(mode);
     setConnState('connected');
@@ -1044,6 +1071,7 @@ export default function AssessmentPage() {
 
     setResumedFromSave(false);
     bell();
+    playAudio(AUDIO.reconnected);
     showToast(wasPaused ? 'Reconnected — recording resumed' : 'Reconnected');
   }, [showToast]);
 
@@ -1052,19 +1080,30 @@ export default function AssessmentPage() {
     setReconnectError(null);
     try {
       let conn: HRConnection;
-      if (deviceRef.current && !directReconnectFailedRef.current) {
+      if (deviceRef.current && !skipSilentConnectRef.current) {
         try {
           // Same strap, already paired — straight back in, no picker.
-          conn = await reconnectHW9(deviceRef.current, handleData, handleDisconnect, setBattery);
+          conn = await reconnectHW9(deviceRef.current, handleData, handleDisconnect, {
+            onBattery: setBattery,
+          });
         } catch {
           // Out of range too long, or the pairing was dropped. A failed GATT connect
           // can outlast the ~5s user-activation window, so requestDevice() here may
           // be refused; the next tap skips straight to it with a fresh gesture.
-          directReconnectFailedRef.current = true;
-          conn = await connectHW9(handleData, handleDisconnect, setBattery);
+          skipSilentConnectRef.current = true;
+          conn = await connectHW9(handleData, handleDisconnect, {
+            onBattery: setBattery,
+            skipKnownDevices: true,
+          });
         }
       } else {
-        conn = await connectHW9(handleData, handleDisconnect, setBattery);
+        conn = await connectHW9(handleData, handleDisconnect, {
+          onBattery: setBattery,
+          onStage: (stage) => {
+            if (stage === 'searching') skipSilentConnectRef.current = true;
+          },
+          skipKnownDevices: skipSilentConnectRef.current,
+        });
       }
       adoptConnection(conn, 'ble');
       resumeAfterReconnect();
@@ -1082,7 +1121,10 @@ export default function AssessmentPage() {
   }, [adoptConnection, handleData, handleDisconnect, resumeAfterReconnect]);
 
   const reconnectSimulated = useCallback(() => {
-    adoptConnection(connectSimulated(handleData, handleDisconnect, setBattery), 'sim');
+    adoptConnection(
+      connectSimulated(handleData, handleDisconnect, { onBattery: setBattery }),
+      'sim'
+    );
     resumeAfterReconnect();
   }, [adoptConnection, handleData, handleDisconnect, resumeAfterReconnect]);
 
@@ -1094,13 +1136,23 @@ export default function AssessmentPage() {
 
       if (mode === 'sim') {
         try {
-          adoptConnection(connectSimulated(handleData, handleDisconnect, setBattery), 'sim');
+          adoptConnection(
+            connectSimulated(handleData, handleDisconnect, { onBattery: setBattery }),
+            'sim'
+          );
+          playAudio(AUDIO.welcome);
         } catch (e: any) {
           setConnState('idle');
           setConnNotice({ text: e?.message || 'Could not start simulation.', tone: 'error' });
         }
         return;
       }
+
+      // Look up the remembered strap before the overlay paints, so its copy is
+      // right from the first frame rather than flickering a moment later. This is
+      // a local permission lookup, not a radio call — it costs milliseconds.
+      const paired = skipSilentConnectRef.current ? null : await findPairedHW9();
+      setBleStage(paired ? 'reconnecting' : 'searching');
 
       // Branded overlay first, so Chrome's picker reads as a brief system
       // confirmation rather than the main interaction.
@@ -1111,14 +1163,32 @@ export default function AssessmentPage() {
       await new Promise((r) => setTimeout(r, 1000));
 
       try {
-        adoptConnection(await connectHW9(handleData, handleDisconnect, setBattery), 'ble');
+        adoptConnection(
+          await connectHW9(handleData, handleDisconnect, {
+            onBattery: setBattery,
+            onStage: (stage) => {
+              setBleStage(stage);
+              // Falling through to the picker means the silent route just failed;
+              // do not spend the next tap on it. Cleared again on a successful
+              // connect in adoptConnection.
+              if (stage === 'searching') skipSilentConnectRef.current = true;
+            },
+            skipKnownDevices: skipSilentConnectRef.current,
+          }),
+          'ble'
+        );
+        playAudio(AUDIO.welcome);
       } catch (e: any) {
         setConnState('idle');
         setConnNotice(
           // Chrome throws NotFoundError when the participant dismisses the picker.
           e?.name === 'NotFoundError'
             ? { text: 'Connection cancelled. Tap Connect to try again.', tone: 'muted' }
-            : { text: e?.message || 'Could not connect to the armband.', tone: 'error' }
+            : // A slow failing auto-reconnect can outlive the gesture that allows
+              // requestDevice(). The next tap skips straight to the picker.
+              e?.name === 'SecurityError' || e?.name === 'NotAllowedError'
+              ? { text: 'Tap Connect again to choose your armband.', tone: 'muted' }
+              : { text: e?.message || 'Could not connect to the armband.', tone: 'error' }
         );
       } finally {
         setBlePrompt(false);
@@ -1143,11 +1213,7 @@ export default function AssessmentPage() {
       setResumeInfo(null);
       setPhase('resting');
       bell();
-      speak(
-        carry > 0
-          ? 'Close your eyes and breathe naturally. Recording resumes now.'
-          : 'Close your eyes and breathe naturally. Recording begins now.'
-      );
+      playAudio(AUDIO.restingStart);
     },
     [restingMs]
   );
@@ -1157,7 +1223,7 @@ export default function AssessmentPage() {
     setRestingMetrics(computeAllMetrics(restingRRRef.current));
     setPhase('resting-done');
     doubleBell();
-    speak('Recording complete. You may open your eyes.');
+    playAudio(AUDIO.restingComplete);
   }, []);
 
   const startRFSegment = useCallback(
@@ -1173,9 +1239,7 @@ export default function AssessmentPage() {
       setResumeInfo(null);
       setPhase('rf');
       bell();
-      speak(
-        `Breathe at ${RF_RATES[index].toFixed(1)} breaths per minute. Follow the circle. Inhale as it grows, exhale as it settles.`
-      );
+      playAudio(AUDIO.rate[index]);
     },
     [rfSegmentMs]
   );
@@ -1195,12 +1259,18 @@ export default function AssessmentPage() {
     ]);
 
     if (index < RF_RATES.length - 1) {
-      startRFSegment(index + 1);
+      // Hold the next segment until the handoff cue finishes, so the recording
+      // does not start while the participant is still hearing the previous rate.
+      const gen = runGenerationRef.current;
+      playAudio(AUDIO.rateComplete).then(() => {
+        // A restart during the cue must not resurrect the run.
+        if (runGenerationRef.current !== gen) return;
+        startRFSegment(index + 1);
+      });
     } else {
       collectorRef.current = null;
       setPhase('rf-done');
       doubleBell();
-      speak('Breathing assessment complete. Well done.');
     }
   }, [rfIndex, startRFSegment]);
 
@@ -1224,14 +1294,15 @@ export default function AssessmentPage() {
 
   // ===== ABORT / RESTART =====
   const abort = useCallback(() => {
-    cancelSpeech();
+    cancelAudio();
+    runGenerationRef.current += 1;
     clearSession(accessToken);
     collectorRef.current = null;
     restingRRRef.current = [];
     rfRRRef.current = RF_RATES.map(() => []);
     segDoneRef.current = true;
     pausedRef.current = null;
-    directReconnectFailedRef.current = false;
+    skipSilentConnectRef.current = false;
     setConfirmAbort(false);
     setShowDisconnectOverlay(false);
     setReconnectError(null);
@@ -1372,6 +1443,7 @@ export default function AssessmentPage() {
       setBattery(null);
       setConnState('idle');
       setPhase('complete');
+      playAudio(AUDIO.assessmentComplete);
     } catch (e: any) {
       setSaveError(e?.message || 'Could not save your results. Your assessment is still on screen.');
     } finally {
@@ -1530,7 +1602,13 @@ export default function AssessmentPage() {
               </p>
             ) : null}
 
-            <PrimaryButton onClick={() => setPhase('checklist')} disabled={!canStart}>
+            <PrimaryButton
+              onClick={() => {
+                setPhase('checklist');
+                playAudio(AUDIO.checklist);
+              }}
+              disabled={!canStart}
+            >
               Begin
             </PrimaryButton>
           </Panel>
@@ -1707,7 +1785,14 @@ export default function AssessmentPage() {
                 and start over when you are ready.
               </p>
             )}
-            <PrimaryButton onClick={() => setPhase('rf-intro')}>Continue</PrimaryButton>
+            <PrimaryButton
+              onClick={() => {
+                setPhase('rf-intro');
+                playAudio(AUDIO.rfIntro);
+              }}
+            >
+              Continue
+            </PrimaryButton>
           </Panel>
         ) : null}
 
@@ -1996,7 +2081,7 @@ export default function AssessmentPage() {
       ) : null}
 
       {/* ===== BLE SEARCH OVERLAY ===== */}
-      {blePrompt ? <BleSearchOverlay /> : null}
+      {blePrompt ? <BleSearchOverlay stage={bleStage} /> : null}
 
       {/* ===== DISCONNECT / RESUME ===== */}
       {showDisconnectOverlay ? (

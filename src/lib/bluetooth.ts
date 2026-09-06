@@ -3,6 +3,8 @@
 // BLE Heart Rate Service 0x180D, Characteristic 0x2A37
 // RR intervals at 1/1024 second resolution
 // Battery Service 0x180F, Battery Level 0x2A19 (optional — not every strap has it)
+// Re-pairing is avoided via getDevices(), which lists straps this origin already
+// has permission for — so only the very first assessment shows the native picker.
 // This module is the candidate for extraction to a shared package
 
 export interface HRDataPoint {
@@ -14,6 +16,22 @@ export interface HRDataPoint {
 export type DataCallback = (data: HRDataPoint) => void;
 export type DisconnectCallback = () => void;
 export type BatteryCallback = (level: number) => void;
+
+// Which route a connect attempt is taking, so the UI can say what is happening.
+//   'reconnecting' — silently reattaching to a strap we already have permission for
+//   'searching'    — falling back to the native picker
+export type ConnectStage = 'reconnecting' | 'searching';
+export type StageCallback = (stage: ConnectStage) => void;
+
+export interface ConnectOptions {
+  onBattery?: BatteryCallback;
+  onStage?: StageCallback;
+  // Skip the silent path and go straight to the picker. Worth setting once the
+  // silent path has already failed: a slow failing GATT connect can outlast the
+  // ~5s user-activation window that requestDevice() needs, so retrying it would
+  // burn the gesture and get the picker refused again.
+  skipKnownDevices?: boolean;
+}
 
 export interface HRConnection {
   // Tears the connection down deliberately — does NOT fire onDisconnect.
@@ -27,12 +45,47 @@ export interface HRConnection {
 const HR_SERVICE = 'heart_rate';
 const BATTERY_SERVICE = 'battery_service';
 
-// Real BLE connection to Coospo HW9 — shows the native device picker.
+// Straps this origin already has permission for. Returns null when the browser
+// lacks getDevices() (Safari, older Chrome), when permission was never granted,
+// or when nothing matching is paired — every one of which is a normal state, not
+// an error.
+export async function findPairedHW9(): Promise<BluetoothDevice | null> {
+  try {
+    if (typeof navigator === 'undefined' || !navigator.bluetooth) return null;
+    if (typeof navigator.bluetooth.getDevices !== 'function') return null;
+
+    const devices = await navigator.bluetooth.getDevices();
+    return devices.find((d: BluetoothDevice) => (d.name || '').toUpperCase().includes('HW9')) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+// Real BLE connection to Coospo HW9.
+//
+// Tries the strap the participant already paired first, so a returning
+// participant never sees the native picker. Only a first-ever assessment — or a
+// strap that is off, flat or out of range — falls through to requestDevice().
 export async function connectHW9(
   onData: DataCallback,
   onDisconnect: DisconnectCallback,
-  onBattery?: BatteryCallback
+  options: ConnectOptions = {}
 ): Promise<HRConnection> {
+  const { onBattery, onStage, skipKnownDevices } = options;
+
+  if (!skipKnownDevices) {
+    const known = await findPairedHW9();
+    if (known) {
+      onStage?.('reconnecting');
+      try {
+        return await attachToDevice(known, onData, onDisconnect, onBattery);
+      } catch {
+        // Off, flat or out of range. Fall through and ask for it properly.
+      }
+    }
+  }
+
+  onStage?.('searching');
   const device = await navigator.bluetooth.requestDevice({
     filters: [
       { services: [HR_SERVICE] },
@@ -51,9 +104,9 @@ export async function reconnectHW9(
   device: BluetoothDevice,
   onData: DataCallback,
   onDisconnect: DisconnectCallback,
-  onBattery?: BatteryCallback
+  options: ConnectOptions = {}
 ): Promise<HRConnection> {
-  return attachToDevice(device, onData, onDisconnect, onBattery);
+  return attachToDevice(device, onData, onDisconnect, options.onBattery);
 }
 
 async function attachToDevice(
@@ -165,7 +218,7 @@ function parseHeartRateData(value: DataView): HRDataPoint {
 export function connectSimulated(
   onData: DataCallback,
   _onDisconnect: DisconnectCallback,
-  onBattery?: BatteryCallback
+  options: ConnectOptions = {}
 ): HRConnection {
   let prevRR = 830;
 
@@ -186,7 +239,7 @@ export function connectSimulated(
   // A simulated strap reports a simulated battery, so the whole UI is exercisable
   // without hardware.
   const battery = 78;
-  onBattery?.(battery);
+  options.onBattery?.(battery);
 
   return {
     device: null,
