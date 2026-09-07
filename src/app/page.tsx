@@ -889,6 +889,13 @@ export default function AssessmentPage() {
   // Bumped on restart. Anything resumed after an await must check it still matches,
   // since cancelAudio settles pending clip promises rather than leaving them hanging.
   const runGenerationRef = useRef(0);
+  // ⚠ IDENTITY FOR ONE COMPLETED SITTING, so the platform can tell a REDELIVERY of this
+  // completion from a genuine SECOND assessment. Minted once in finalize and cleared on abort:
+  // finalize running twice for one sitting reuses it (the platform drops the duplicate), while a
+  // restarted run mints a new one (the platform accepts it). Before this the platform deduped on a
+  // per-mount boolean, so a legitimate retake in the same page was silently discarded -- no submit,
+  // no error, no row, and a 20-minute recording lost with nothing to find.
+  const completionIdRef = useRef<string | null>(null);
   const [elapsed, setElapsed] = useState(0);
 
   // Results
@@ -1333,6 +1340,9 @@ export default function AssessmentPage() {
   const abort = useCallback(() => {
     cancelAudio();
     runGenerationRef.current += 1;
+    // A new sitting is a new completion. Clearing this is what lets the platform accept the next
+    // result instead of mistaking it for a redelivery of the last one.
+    completionIdRef.current = null;
     clearSession();
     collectorRef.current = null;
     restingRRRef.current = [];
@@ -1428,8 +1438,22 @@ export default function AssessmentPage() {
 
     // Everything the platform needs to write the result and redraw the journey.
     // The assessment stores none of this itself.
+    // ⚠ MINTED ONCE PER SITTING. `||=` rather than a fresh value: finalize can run again for the
+    // SAME completion (a retry after a transient failure), and that must carry the SAME id so the
+    // platform drops it. Only abort clears it, which is what makes a restart a new completion.
+    if (!completionIdRef.current) {
+      completionIdRef.current =
+        typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+          ? crypto.randomUUID()
+          : `c-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    }
+
     const message = {
       type: 'assessment-complete',
+      // Read by the platform's listener to distinguish a redelivery from a second assessment.
+      // A platform build that predates this field falls back to accepting once per mount, which is
+      // the behaviour that shipped before -- so an older parent is no worse off, never worse.
+      completionId: completionIdRef.current,
       metrics: {
         recoveryIndex: recovery,
         rmssd: m?.rmssd ?? null,
@@ -1479,6 +1503,18 @@ export default function AssessmentPage() {
     };
 
     try {
+      // ⚠ DIAGNOSTIC, KEPT. When a completion does not reach the platform, the first question is
+      // always "did the app send at all", and until now nothing on either side could answer it.
+      // It logs the SHAPE and the identity, never the recording: rawData carries thousands of RR
+      // intervals and putting those in a console is a different problem.
+      console.log('[capacity-assessment] posting completion to parent', {
+        type: message.type,
+        completionId: message.completionId,
+        metricKeys: Object.keys(message.metrics).length,
+        recoveryIndex: message.metrics.recoveryIndex,
+        isFramed: window.parent !== window,
+      });
+
       // '*' is deliberate: the assessment does not know the platform's origin, and
       // the parent validates the sender on its end. Who may embed this app at all
       // is constrained by the frame-ancestors CSP in next.config.js.
