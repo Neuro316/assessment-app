@@ -80,6 +80,10 @@ const AUDIO = {
 
 const PLATFORM_URL = process.env.NEXT_PUBLIC_PLATFORM_URL || 'https://university.neuroprogeny.com';
 
+// The coaching call the completion screen sends people to. It lives on the
+// University, outside this iframe, so the link has to break out of the frame.
+const COACHING_URL = 'https://university.neuroprogeny.com/programs/15-minute-coaching-session';
+
 // Caps on what rides in the postMessage. A 20 minute recording is well under
 // these, but a runaway buffer must not produce a message the parent cannot handle.
 const MAX_RESTING_RR = 2000;
@@ -2138,8 +2142,28 @@ export default function AssessmentPage() {
               </p>
             </div>
 
-            {/* The participant is already inside the University, so there is nowhere
-                to send them and nothing to sell here. */}
+            {/* A finished assessment is the moment the numbers mean the most and the
+                least — the participant has them, but not yet what they are for. */}
+            <div className="rounded-2xl p-7 mb-8 text-center" style={{ background: C.indigo, color: '#ffffff' }}>
+              <h3 className="text-lg font-semibold mb-3">Review your results with a coach</h3>
+              <p className="text-sm leading-relaxed mb-6" style={{ opacity: 0.85 }}>
+                A 15-minute coaching call to walk through your findings, understand what your
+                system is protecting, and identify your most impactful next step. Use code
+                CAPACITY when you book.
+              </p>
+              <a
+                href={COACHING_URL}
+                target="_parent"
+                className="inline-flex items-center justify-center rounded-xl px-6 py-3 text-sm font-semibold transition-opacity hover:opacity-90"
+                style={{ background: '#ffffff', color: C.indigo }}
+              >
+                Book a review call
+              </a>
+              <p className="text-xs mt-4" style={{ opacity: 0.75 }}>
+                Use code <span className="font-mono font-bold">CAPACITY</span> at checkout — complimentary with your assessment
+              </p>
+            </div>
+
             <p className="text-center text-sm" style={{ opacity: 0.62 }}>
               Your results have been saved to your journey.
             </p>
