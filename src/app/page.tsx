@@ -2148,8 +2148,7 @@ export default function AssessmentPage() {
               <h3 className="text-lg font-semibold mb-3">Review your results with a coach</h3>
               <p className="text-sm leading-relaxed mb-6" style={{ opacity: 0.85 }}>
                 A 15-minute coaching call to walk through your findings, understand what your
-                system is protecting, and identify your most impactful next step. Use code
-                CAPACITY when you book.
+                system is protecting, and identify your most impactful next step.
               </p>
               <a
                 href={COACHING_URL}
