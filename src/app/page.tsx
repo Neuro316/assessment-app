@@ -80,9 +80,9 @@ const AUDIO = {
 
 const PLATFORM_URL = process.env.NEXT_PUBLIC_PLATFORM_URL || 'https://university.neuroprogeny.com';
 
-// The coaching call the completion screen sends people to. It lives on the
-// University, outside this iframe, so the link has to break out of the frame.
-const COACHING_URL = 'https://university.neuroprogeny.com/programs/15-minute-coaching-session';
+// The coaching call the completion screen sends people to. It is an external
+// booking widget, outside this iframe, so the link has to break out of the frame.
+const COACHING_URL = 'https://api.leadconnectorhq.com/widget/bookings/cameron-allen-personal-calendar-nznqif3gc';
 
 // Caps on what rides in the postMessage. A 20 minute recording is well under
 // these, but a runaway buffer must not produce a message the parent cannot handle.
@@ -2158,9 +2158,6 @@ export default function AssessmentPage() {
               >
                 Book a review call
               </a>
-              <p className="text-xs mt-4" style={{ opacity: 0.75 }}>
-                Use code <span className="font-mono font-bold">CAPACITY</span> at checkout — complimentary with your assessment
-              </p>
             </div>
 
             <p className="text-center text-sm" style={{ opacity: 0.62 }}>
