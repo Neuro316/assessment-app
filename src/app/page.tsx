@@ -39,6 +39,7 @@ import {
 import BreathPacer from '@/components/BreathPacer';
 import { computeAllMetrics, type HRVMetrics } from '@/lib/hrv-metrics';
 import { bell, cancelAudio, doubleBell, playAudio } from '@/lib/audio';
+import type { LaunchMode } from '@/lib/launch-token';
 import {
   clearSession,
   formatSavedAt,
@@ -804,6 +805,10 @@ export default function AssessmentPage() {
   const [assessmentNumber, setAssessmentNumber] = useState(1);
   const [journeyPhase, setJourneyPhase] = useState<string | null>(null);
   const [fastMode, setFastMode] = useState(false);
+  // Who the launch token says this is, once /api/verify-launch has vouched for it.
+  // null without a valid token. Read by nothing yet.
+  const [launchPersonId, setLaunchPersonId] = useState<string | null>(null);
+  const [launchMode, setLaunchMode] = useState<LaunchMode | null>(null);
 
   // Device
   const [connState, setConnState] = useState<'idle' | 'connecting' | 'connected'>('idle');
@@ -902,6 +907,31 @@ export default function AssessmentPage() {
     if (Number.isFinite(n) && n > 0) setAssessmentNumber(n);
     setJourneyPhase(params.get('phase'));
     if (params.get('fast') === '1') setFastMode(true);
+
+    // A signed launch token, when the link carries one. Verified on the server so the
+    // secret never reaches the browser. It grants nothing yet: a rejected or missing
+    // token leaves access exactly as embedded=true already decided it.
+    const token = params.get('token');
+    if (token) {
+      (async () => {
+        try {
+          const res = await fetch('/api/verify-launch', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ token }),
+          });
+          if (!res.ok) {
+            console.warn('launch token rejected');
+            return;
+          }
+          const claims = (await res.json()) as { personId: string; mode: LaunchMode };
+          setLaunchPersonId(claims.personId);
+          setLaunchMode(claims.mode);
+        } catch {
+          console.warn('launch token rejected');
+        }
+      })();
+    }
   }, []);
 
   // ----- recover an interrupted assessment -----
