@@ -5,7 +5,10 @@
 // and UI work can proceed. Titles, rates, audio keys and descriptions are all
 // provisional and should not ship to participants.
 
-import type { PracticeExercise } from './types';
+// From the package source rather than '@neuroprogeny/practice', which resolves to
+// its built dist/ — that would make the app's type-check depend on the package
+// having been built first.
+import type { PracticeExercise } from '../../../packages/practice/src/types';
 
 export const PRACTICE_EXERCISES: PracticeExercise[] = [
   {
