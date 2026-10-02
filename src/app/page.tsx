@@ -36,6 +36,7 @@ import {
   type HRConnection,
   type HRDataPoint,
 } from '@/lib/bluetooth';
+import BreathPacer from '@/components/BreathPacer';
 import { computeAllMetrics, type HRVMetrics } from '@/lib/hrv-metrics';
 import { bell, cancelAudio, doubleBell, playAudio } from '@/lib/audio';
 import {
@@ -266,54 +267,6 @@ function RRTrace({ data }: { data: number[] }) {
     >
       <polyline points={pts} fill="none" stroke={C.blue} strokeWidth="1.5" strokeLinejoin="round" />
     </svg>
-  );
-}
-
-function BreathPacer({ rate }: { rate: number }) {
-  const [frac, setFrac] = useState(0);
-
-  useEffect(() => {
-    const start = performance.now();
-    const period = (60 / rate) * 1000;
-    let raf = 0;
-    const loop = (t: number) => {
-      setFrac(((t - start) % period) / period);
-      raf = requestAnimationFrame(loop);
-    };
-    raf = requestAnimationFrame(loop);
-    return () => cancelAnimationFrame(raf);
-  }, [rate]);
-
-  // Sinusoidal breath: 0 at the bottom of the exhale, 1 at the top of the inhale.
-  const amp = (1 - Math.cos(2 * Math.PI * frac)) / 2;
-  const scale = 0.4 + amp * 0.6;
-  const inhaling = frac < 0.5;
-
-  return (
-    <div className="relative flex items-center justify-center" style={{ width: 260, height: 260 }}>
-      <div
-        className="absolute rounded-full"
-        style={{ width: 258, height: 258, border: `1px solid ${C.mist}` }}
-      />
-      <div
-        className="absolute rounded-full"
-        style={{
-          width: 240,
-          height: 240,
-          transform: `scale(${scale})`,
-          background: `radial-gradient(circle, ${C.blue}22 0%, ${C.blue}0d 70%, transparent 100%)`,
-          border: `2px solid ${C.blue}`,
-          opacity: 0.35 + amp * 0.5,
-          willChange: 'transform',
-        }}
-      />
-      <div
-        className="relative text-sm tracking-[0.28em] uppercase font-medium"
-        style={{ color: C.indigo, opacity: 0.85 }}
-      >
-        {inhaling ? 'Inhale' : 'Exhale'}
-      </div>
-    </div>
   );
 }
 
