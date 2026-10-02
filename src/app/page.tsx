@@ -1460,6 +1460,12 @@ export default function AssessmentPage() {
     };
 
     try {
+      const isFramed = window.parent !== window;
+      // Results go only to the University. If the parent is any other origin the
+      // browser drops the message, so nothing reaches a page that framed us without
+      // being the platform.
+      const targetOrigin = new URL(PLATFORM_URL).origin;
+
       // ⚠ DIAGNOSTIC, KEPT. When a completion does not reach the platform, the first question is
       // always "did the app send at all", and until now nothing on either side could answer it.
       // It logs the SHAPE and the identity, never the recording: rawData carries thousands of RR
@@ -1469,13 +1475,14 @@ export default function AssessmentPage() {
         completionId: message.completionId,
         metricKeys: Object.keys(message.metrics).length,
         recoveryIndex: message.metrics.recoveryIndex,
-        isFramed: window.parent !== window,
+        isFramed,
+        targetOrigin,
       });
 
-      // '*' is deliberate: the assessment does not know the platform's origin, and
-      // the parent validates the sender on its end. Who may embed this app at all
-      // is constrained by the frame-ancestors CSP in next.config.js.
-      window.parent.postMessage(message, '*');
+      // Standalone (no parent frame) there is nobody to hand results to, so skip the
+      // send rather than post to ourselves. Who may embed this app at all is
+      // constrained by the frame-ancestors CSP in next.config.js.
+      if (isFramed) window.parent.postMessage(message, targetOrigin);
       await new Promise((r) => setTimeout(r, 600));
 
       // Finished and saved — the draft is no longer needed on any device.

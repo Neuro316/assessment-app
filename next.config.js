@@ -1,18 +1,14 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  // Allow embedding as iframe from the NPU platform domain
+  // Allow embedding as iframe from the NPU platform domain only
   async headers() {
     return [
       {
         source: '/:path*',
         headers: [
           {
-            key: 'X-Frame-Options',
-            value: 'ALLOWALL',
-          },
-          {
             key: 'Content-Security-Policy',
-            value: "frame-ancestors 'self' https://*.neuroprogeny.com https://*.vercel.app",
+            value: "frame-ancestors 'self' https://university.neuroprogeny.com",
           },
         ],
       },

@@ -27,7 +27,15 @@ Guides a participant through a 20-minute biometric assessment:
 
 ## Auth
 
-Participant authenticates through the NPU Platform. Their Supabase JWT is passed to this app via URL params. No separate login.
+This app has no login and reads no JWT or other token from the URL. It carries no Supabase client.
+
+The only launch params are `embedded`, `name`, `attempt`, `phase` and `fast`. Without `embedded=true` the app shows a gate screen pointing to Neuro Progeny University; with it, the full assessment runs. Nothing verifies who opened it.
+
+What limits it today:
+- Only `https://university.neuroprogeny.com` (and the app itself) may frame it, via the `frame-ancestors` CSP in `next.config.js`.
+- Results are posted only to the platform's origin (`NEXT_PUBLIC_PLATFORM_URL`, default `https://university.neuroprogeny.com`), and only when the app is framed. Opened standalone, it sends results nowhere.
+
+Token-based access control is planned and not built.
 
 ## Setup
 
