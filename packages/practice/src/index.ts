@@ -27,3 +27,11 @@ export { breathDurationMs, cueFor, MIN_FULLY_CUED_BREATH_MS } from './pacer-engi
 export type { BreathPhase, BreathPhaseKind, BreathPattern } from './pacer-engine';
 
 export { EXTENDED_BREATH_PATTERNS } from './extended-breath-patterns';
+
+export { useBreathPattern, isHoldPhase } from './use-breath-pattern';
+export type { BreathPatternState, UseBreathPatternOptions } from './use-breath-pattern';
+
+export { useWakeLock } from './use-wake-lock';
+
+export { recordHoldOutcome } from './hold-recording';
+export type { HoldEndedBy, HoldRecord } from './hold-recording';
