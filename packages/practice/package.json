@@ -17,7 +17,8 @@
   ],
   "sideEffects": false,
   "scripts": {
-    "build": "tsup src/index.ts --format esm --dts"
+    "build": "tsup src/index.ts --format esm --dts",
+    "test": "tsup --config tsup.test.config.ts && node --test \".test-build/*.test.cjs\""
   },
   "peerDependencies": {
     "react": "^18.3.0",
