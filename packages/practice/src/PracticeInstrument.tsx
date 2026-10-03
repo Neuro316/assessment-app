@@ -96,6 +96,9 @@ interface Chosen {
   mode: 'armband' | 'pacer';
 }
 
+// The ends of the five-point session rating, shown under the buttons.
+const RATING_LABELS = ['Not for me', 'Not much', 'Fine', 'Helped', 'Exactly what I needed'];
+
 const FAMILY_LABEL = { breathing: 'Breathing', visualization: 'Visualization', mindfulness: 'Field experiments' } as const;
 
 // How long an exercise runs, from its program. Holds the person ends themselves
@@ -346,9 +349,11 @@ export default function PracticeInstrument({
   // Where the person is in the library: the purpose cards, or one purpose's list.
   const [purpose, setPurpose] = useState<PracticePurpose | 'custom' | null>(null);
   const [family, setFamily] = useState<'all' | 'breathing' | 'visualization' | 'mindfulness'>('all');
-  // A field experiment's note, written on the finished screen before the record
-  // is handed to the host.
+  // Written on the finished screen before the record is handed to the host: a
+  // field experiment's note, and every session's rating.
   const [note, setNote] = useState('');
+  const [rating, setRating] = useState<number | null>(null);
+  const [ratingNote, setRatingNote] = useState('');
   const [running, setRunning] = useState<RunningSession | null>(null);
   const [finished, setFinished] = useState<Finished | null>(null);
   const [now, setNow] = useState(() => Date.now());
@@ -493,6 +498,8 @@ export default function PracticeInstrument({
       rrSeries: seriesRef.current,
       events: eventsRef.current,
       listenNumber: listenNumber ?? null,
+      rating: null,
+      ratingNote: null,
     };
 
     rrRef.current = [];
@@ -501,11 +508,27 @@ export default function PracticeInstrument({
     holdsRef.current = [];
     setRunning(null);
     setNote('');
+    setRating(null);
+    setRatingNote('');
+    // The record waits on the finished screen for the rating (and a field
+    // experiment's note), then goes to the host on Done. If the component goes
+    // away first, it is flushed without them: see the unmount effect.
+    pendingRef.current = record;
     setFinished({ exercise: running.exercise, record });
-    // A field experiment's record waits for the note on the finished screen;
-    // everything else is handed over now.
-    if (running.exercise.kind !== 'field') onRecordSession(record);
-  }, [running, strap.state, onRecordSession, listenNumber]);
+  }, [running, strap.state, listenNumber]);
+
+  // A record not yet handed over. Flushed on unmount so a session is never lost
+  // to a navigation away from the finished screen.
+  const pendingRef = useRef<PracticeSessionRecord | null>(null);
+  const onRecordRef = useRef(onRecordSession);
+  onRecordRef.current = onRecordSession;
+  useEffect(
+    () => () => {
+      if (pendingRef.current) onRecordRef.current(pendingRef.current);
+      pendingRef.current = null;
+    },
+    []
+  );
 
   const container: CSSProperties = {
     width: '100%',
@@ -739,10 +762,73 @@ export default function PracticeInstrument({
             </p>
           )}
         </div>
+        <div style={{ borderRadius: 16, background: '#fff', border: `1px solid ${C.mist}`, padding: 20 }}>
+          <div style={{ fontSize: 14, color: C.indigo, marginBottom: 10 }}>How was this session for you?</div>
+          <div role="radiogroup" aria-label="Session rating" style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+            {RATING_LABELS.map((label, i) => {
+              const v = i + 1;
+              const on = rating === v;
+              return (
+                <button
+                  key={v}
+                  type="button"
+                  role="radio"
+                  aria-checked={on}
+                  onClick={() => setRating(on ? null : v)}
+                  title={label}
+                  style={{
+                    flex: '1 1 0',
+                    minWidth: 44,
+                    padding: '8px 4px',
+                    borderRadius: 8,
+                    border: `1px solid ${on ? C.blue : C.border}`,
+                    background: on ? C.blue : '#fff',
+                    color: on ? '#fff' : C.indigo,
+                    font: 'inherit',
+                    fontSize: 13,
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                  }}
+                >
+                  {v}
+                </button>
+              );
+            })}
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: C.text3, marginTop: 4 }}>
+            <span>{RATING_LABELS[0]}</span>
+            <span>{RATING_LABELS[4]}</span>
+          </div>
+          <input
+            id="np-practice-rating-note"
+            aria-label="Anything to add"
+            value={ratingNote}
+            onChange={(e) => setRatingNote(e.target.value)}
+            placeholder="Anything to add? (optional)"
+            style={{
+              width: '100%',
+              boxSizing: 'border-box',
+              marginTop: 10,
+              font: 'inherit',
+              fontSize: 13,
+              padding: '8px 10px',
+              borderRadius: 8,
+              border: `1px solid ${C.border}`,
+              color: C.charcoal,
+            }}
+          />
+        </div>
         <div style={{ display: 'flex', justifyContent: 'center' }}>
           <Button
             onClick={() => {
-              if (finished.exercise.kind === 'field') onRecordSession({ ...record, note: note.trim() || null });
+              const out: PracticeSessionRecord = {
+                ...record,
+                note: finished.exercise.kind === 'field' ? note.trim() || null : record.note ?? null,
+                rating,
+                ratingNote: ratingNote.trim() || null,
+              };
+              pendingRef.current = null;
+              onRecordSession(out);
               setFinished(null);
             }}
           >
