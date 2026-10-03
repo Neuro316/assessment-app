@@ -22,3 +22,8 @@ export type {
   PracticeSessionRecord,
   PracticeTier,
 } from './types';
+
+export { breathDurationMs, cueFor, MIN_FULLY_CUED_BREATH_MS } from './pacer-engine';
+export type { BreathPhase, BreathPhaseKind, BreathPattern } from './pacer-engine';
+
+export { EXTENDED_BREATH_PATTERNS } from './extended-breath-patterns';
