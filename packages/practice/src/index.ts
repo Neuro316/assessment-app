@@ -48,6 +48,8 @@ export type {
   PracticeCategory,
   PracticeExercise,
   PracticeHoldRecord,
+  RatingScale,
+  SessionRatings,
   PracticePerson,
   PracticeSamplesSummary,
   PracticeSessionMetrics,

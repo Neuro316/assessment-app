@@ -295,10 +295,13 @@ export interface PracticeSessionRecord {
   // A field experiment's write-up, entered on the finished screen. null for
   // everything else, and when the person wrote nothing.
   note?: string | null;
-  // How the session was for the person, asked once on the finished screen.
-  // 1 (not for me) to 5 (exactly what I needed). null when skipped. The host
-  // collects these across sessions for the Feedback review; the package only
-  // asks.
-  rating: number | null;
+  // How the person feels after the session, on four quick scales asked once on
+  // the finished screen. Each is 1 to 5 from "less" to "more" than before the
+  // session, so 3 is no change. null when skipped. The host collects these
+  // across sessions for the Feedback review; the package only asks.
+  ratings: SessionRatings | null;
   ratingNote: string | null;
 }
+
+export type RatingScale = 'grounded' | 'focused' | 'energy' | 'presence';
+export type SessionRatings = Record<RatingScale, number | null>;

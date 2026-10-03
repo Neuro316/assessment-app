@@ -15,7 +15,7 @@ import { useCallback, useEffect, useRef, useState, type CSSProperties, type Reac
 
 import { primeAudio } from './audio';
 import type { HRDataPoint } from './bluetooth';
-import type { PracticePurpose, RRSample, SessionEvent } from './types';
+import type { PracticePurpose, RatingScale, RRSample, SessionEvent, SessionRatings } from './types';
 import { autoEndMs } from './pacer';
 import { PRACTICE_PURPOSES } from './library';
 import { computeSessionMetrics, emptySessionMetrics } from './hrv-metrics';
@@ -96,8 +96,95 @@ interface Chosen {
   mode: 'armband' | 'pacer';
 }
 
-// The ends of the five-point session rating, shown under the buttons.
-const RATING_LABELS = ['Not for me', 'Not much', 'Fine', 'Helped', 'Exactly what I needed'];
+// The four post-session scales, 1 to 5 from less to more than before.
+const RATING_SCALES: { key: RatingScale; label: string }[] = [
+  { key: 'grounded', label: 'Grounded' },
+  { key: 'focused', label: 'Focused' },
+  { key: 'energy', label: 'Energy' },
+  { key: 'presence', label: 'Presence' },
+];
+const EMPTY_RATINGS: SessionRatings = { grounded: null, focused: null, energy: null, presence: null };
+
+// One tap on a five-step track. Reads as a slider, works as five buttons.
+function ScaleRow({ label, value, onChange }: { label: string; value: number | null; onChange: (v: number) => void }) {
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: '84px 1fr', gap: 12, alignItems: 'center' }}>
+      <span style={{ fontSize: 13, color: C.indigo, fontWeight: 500 }}>{label}</span>
+      <div>
+        <div
+          role="radiogroup"
+          aria-label={label}
+          style={{ position: 'relative', display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 0, height: 32 }}
+        >
+          <div
+            aria-hidden
+            style={{
+              position: 'absolute',
+              left: '10%',
+              right: '10%',
+              top: 14,
+              height: 4,
+              borderRadius: 2,
+              background: C.mist,
+            }}
+          />
+          {value !== null ? (
+            <div
+              aria-hidden
+              style={{
+                position: 'absolute',
+                left: '10%',
+                width: `${((value - 1) / 4) * 80}%`,
+                top: 14,
+                height: 4,
+                borderRadius: 2,
+                background: C.teal,
+              }}
+            />
+          ) : null}
+          {[1, 2, 3, 4, 5].map((v) => {
+            const on = value === v;
+            return (
+              <button
+                key={v}
+                type="button"
+                role="radio"
+                aria-checked={on}
+                aria-label={`${label} ${v} of 5`}
+                onClick={() => onChange(v)}
+                style={{
+                  position: 'relative',
+                  background: 'transparent',
+                  border: 0,
+                  padding: 0,
+                  cursor: 'pointer',
+                  display: 'grid',
+                  placeItems: 'center',
+                }}
+              >
+                <span
+                  style={{
+                    width: on ? 20 : 12,
+                    height: on ? 20 : 12,
+                    borderRadius: '50%',
+                    background: on ? C.teal : value !== null && v < value ? C.teal : '#fff',
+                    border: `2px solid ${on || (value !== null && v < value) ? C.teal : C.border}`,
+                    boxShadow: on ? '0 1px 3px rgba(0,0,0,.2)' : 'none',
+                    transition: 'all .12s',
+                  }}
+                />
+              </button>
+            );
+          })}
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10.5, color: C.text3, marginTop: 2 }}>
+          <span>Less</span>
+          <span>More</span>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 const FAMILY_LABEL = { breathing: 'Breathing', visualization: 'Visualization', mindfulness: 'Field experiments' } as const;
 
@@ -352,7 +439,7 @@ export default function PracticeInstrument({
   // Written on the finished screen before the record is handed to the host: a
   // field experiment's note, and every session's rating.
   const [note, setNote] = useState('');
-  const [rating, setRating] = useState<number | null>(null);
+  const [ratings, setRatings] = useState<SessionRatings>(EMPTY_RATINGS);
   const [ratingNote, setRatingNote] = useState('');
   const [running, setRunning] = useState<RunningSession | null>(null);
   const [finished, setFinished] = useState<Finished | null>(null);
@@ -498,7 +585,7 @@ export default function PracticeInstrument({
       rrSeries: seriesRef.current,
       events: eventsRef.current,
       listenNumber: listenNumber ?? null,
-      rating: null,
+      ratings: null,
       ratingNote: null,
     };
 
@@ -508,7 +595,7 @@ export default function PracticeInstrument({
     holdsRef.current = [];
     setRunning(null);
     setNote('');
-    setRating(null);
+    setRatings(EMPTY_RATINGS);
     setRatingNote('');
     // The record waits on the finished screen for the rating (and a field
     // experiment's note), then goes to the host on Done. If the component goes
@@ -763,41 +850,17 @@ export default function PracticeInstrument({
           )}
         </div>
         <div style={{ borderRadius: 16, background: '#fff', border: `1px solid ${C.mist}`, padding: 20 }}>
-          <div style={{ fontSize: 14, color: C.indigo, marginBottom: 10 }}>How was this session for you?</div>
-          <div role="radiogroup" aria-label="Session rating" style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-            {RATING_LABELS.map((label, i) => {
-              const v = i + 1;
-              const on = rating === v;
-              return (
-                <button
-                  key={v}
-                  type="button"
-                  role="radio"
-                  aria-checked={on}
-                  onClick={() => setRating(on ? null : v)}
-                  title={label}
-                  style={{
-                    flex: '1 1 0',
-                    minWidth: 44,
-                    padding: '8px 4px',
-                    borderRadius: 8,
-                    border: `1px solid ${on ? C.blue : C.border}`,
-                    background: on ? C.blue : '#fff',
-                    color: on ? '#fff' : C.indigo,
-                    font: 'inherit',
-                    fontSize: 13,
-                    fontWeight: 600,
-                    cursor: 'pointer',
-                  }}
-                >
-                  {v}
-                </button>
-              );
-            })}
-          </div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: C.text3, marginTop: 4 }}>
-            <span>{RATING_LABELS[0]}</span>
-            <span>{RATING_LABELS[4]}</span>
+          <div style={{ fontSize: 14, color: C.indigo, marginBottom: 4 }}>Compared with before the session, how do you feel?</div>
+          <div style={{ fontSize: 11.5, color: C.text3, marginBottom: 14 }}>One tap each. The middle means about the same.</div>
+          <div style={{ display: 'grid', gap: 12 }}>
+            {RATING_SCALES.map((sc) => (
+              <ScaleRow
+                key={sc.key}
+                label={sc.label}
+                value={ratings[sc.key]}
+                onChange={(v) => setRatings((r) => ({ ...r, [sc.key]: v }))}
+              />
+            ))}
           </div>
           <input
             id="np-practice-rating-note"
@@ -824,7 +887,7 @@ export default function PracticeInstrument({
               const out: PracticeSessionRecord = {
                 ...record,
                 note: finished.exercise.kind === 'field' ? note.trim() || null : record.note ?? null,
-                rating,
+                ratings: Object.values(ratings).some((v) => v !== null) ? ratings : null,
                 ratingNote: ratingNote.trim() || null,
               };
               pendingRef.current = null;
