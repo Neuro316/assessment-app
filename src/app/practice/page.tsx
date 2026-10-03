@@ -14,17 +14,48 @@
 // Query params, so every path is testable without a redeploy:
 //   ?asSuperadmin=true — unlock through the superadmin arm instead of the program arm
 //   ?noBaseline=true   — pass a null baseline, to show the "take the assessment" banner
+//   ?unbalanced=true   — hold back the activating set (B13, B14, B16) as the host
+//                        would when the recent baseline is not balanced
+//   ?media=<url>       — add a custom media exercise playing that audio URL, with
+//                        bookends, to test the media mode and the event log
 
 import { useEffect, useState } from 'react';
 
 import {
   PracticeInstrument,
   canUseExercise,
+  withBookends,
   type PracticeExercise,
   type PracticePerson,
   type PracticeSessionRecord,
   PRACTICE_EXERCISES,
 } from '@neuroprogeny/practice';
+
+// Stand-in for the host's recommendation from the baseline. The package does not
+// decide this.
+const STUB_RECOMMENDED = ['B1', 'B4'];
+
+// A custom media exercise, the shape a facilitator's upload will take once the
+// platform stores them. Only added when ?media= names a track.
+function customMedia(src: string): PracticeExercise {
+  return {
+    id: 'custom-test-track',
+    title: 'Test track',
+    category: 'calming',
+    minTier: 'insight',
+    family: 'visualization',
+    kind: 'guided',
+    purpose: 'settle',
+    axis: 'Vagal magnitude',
+    moment: 'Test harness only',
+    evidenceTier: 3,
+    description: 'A custom upload, with the spec\'s pre-roll and post-roll around it.',
+    program: withBookends(
+      { phases: [{ mode: 'media', asset: { kind: 'audio', src }, instruction: 'Listen with your eyes closed.' }] },
+      { preRollSec: 30, postRollSec: 30 }
+    ),
+  };
+}
 
 // ===== STUB DATA — TEMPORARY, NOT REAL =====
 // None of this comes from a database or an authenticated person. It exists only so
@@ -45,11 +76,16 @@ export default function PracticeTestPage() {
   const [person, setPerson] = useState<PracticePerson | null>(null);
   const [baseline, setBaseline] = useState<{ resonanceFreq: number | null } | null>(null);
   const [needsBaseline, setNeedsBaseline] = useState(false);
+  const [unbalanced, setUnbalanced] = useState(false);
+  const [exercises, setExercises] = useState<PracticeExercise[]>(PRACTICE_EXERCISES);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     setPerson({ ...STUB_PERSON, isSuperadmin: params.get('asSuperadmin') === 'true' });
     setBaseline(params.get('noBaseline') === 'true' ? null : STUB_BASELINE);
+    setUnbalanced(params.get('unbalanced') === 'true');
+    const media = params.get('media');
+    if (media) setExercises([...PRACTICE_EXERCISES, customMedia(media)]);
   }, []);
 
   if (!person) return <div style={{ minHeight: '100vh', background: '#F0F4F8' }} />;
@@ -88,8 +124,12 @@ export default function PracticeTestPage() {
 
       <PracticeInstrument
         baseline={baseline}
-        exercises={PRACTICE_EXERCISES}
+        exercises={exercises}
         canUseExercise={(exercise: PracticeExercise) => canUseExercise(person, exercise)}
+        recommendedIds={STUB_RECOMMENDED}
+        heldBackReason={(exercise: PracticeExercise) =>
+          unbalanced && exercise.requiresBalancedBaseline ? 'Balanced baseline' : null
+        }
         onRecordSession={(record: PracticeSessionRecord) => {
           // Stub: nothing is persisted, there is no backend behind this yet.
           console.log('[stub] practice session record', record);

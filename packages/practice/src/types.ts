@@ -292,4 +292,7 @@ export interface PracticeSessionRecord {
   // one, when the host knows. The first listen is not the same stimulus as the
   // eighth. null when the host did not say.
   listenNumber: number | null;
+  // A field experiment's write-up, entered on the finished screen. null for
+  // everything else, and when the person wrote nothing.
+  note?: string | null;
 }
