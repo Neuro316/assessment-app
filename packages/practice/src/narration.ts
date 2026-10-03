@@ -21,7 +21,8 @@
 //
 // pauseAfterSec is the quiet that follows the clip, before the next one begins.
 
-import type { PacerPhase, PacerProgram } from './types';
+import type { PacerPhase, PacerProgram, PracticeExercise } from './types';
+import { withBookends } from './pacer';
 
 export interface NarrationSegment {
   // Stable id, e.g. 'V1-3'. The host's asset key.
@@ -199,6 +200,26 @@ export const NARRATION: Record<string, NarrationScript> = {
 // segment then runs as its own text for its spoken length, so a session never
 // breaks on a missing file.
 export type NarrationResolver = (segmentId: string) => string | null;
+
+// A guided exercise with a script and a host resolver plays its narration: each
+// clip as a media phase with the engine-timed quiet after it, wrapped in the
+// paced pre-roll and quiet post-roll the fluidity spec asks of every
+// event-locked session. Anything else (no script, no resolver, or a resolver
+// that has none of the clips) runs the exercise's own program unchanged.
+export function programFor(exercise: PracticeExercise, resolve: NarrationResolver | undefined): PacerProgram {
+  const script = exercise.kind === 'guided' ? NARRATION[exercise.id] : undefined;
+  if (!script || !resolve) return exercise.program;
+  if (!script.segments.some((s) => resolve(s.id))) return exercise.program;
+  return withBookends(guidedProgram(script, resolve));
+}
+
+// The voice the person heard, for the session record; null when no clip played.
+export function narratorIdFor(exercise: PracticeExercise, resolve: NarrationResolver | undefined): string | null {
+  const script = exercise.kind === 'guided' ? NARRATION[exercise.id] : undefined;
+  if (!script || !resolve) return null;
+  if (!script.segments.some((s) => resolve(s.id))) return null;
+  return NARRATOR_VOICES[script.narrator].voiceId;
+}
 
 // Roughly how long a segment takes to say, for the text-only fallback.
 export function spokenSec(text: string): number {

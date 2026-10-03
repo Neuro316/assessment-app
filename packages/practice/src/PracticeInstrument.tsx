@@ -17,6 +17,7 @@ import { primeAudio } from './audio';
 import type { HRDataPoint } from './bluetooth';
 import type { PracticePurpose, RatingScale, RRSample, SessionEvent, SessionRatings } from './types';
 import { autoEndMs } from './pacer';
+import { narratorIdFor, programFor, type NarrationResolver } from './narration';
 import { PRACTICE_PURPOSES } from './library';
 import { computeSessionMetrics, emptySessionMetrics } from './hrv-metrics';
 import PacerSession from './PacerSession';
@@ -84,6 +85,16 @@ export interface PracticeInstrumentProps {
   // Why an exercise beyond the tier gate is held back, when the host knows: the
   // activating set waits for a balanced recent baseline. Return null when open.
   heldBackReason?: (exercise: PracticeExercise) => string | null;
+  // Whether this person may record with the armband. The host decides: Practice
+  // and Mastery include it; Insight only with the armband + assessment bundle.
+  // When false the armband choice is not offered and every session is pacer
+  // only, with the record saying so (hrvAvailable false, metrics null).
+  // Default true.
+  biometricsEnabled?: boolean;
+  // Narration clip URLs for the guided visualizations, by segment id (see
+  // narrationManifest()). Return null for a missing clip and the segment falls
+  // back to timed text. Omit it and every guided session runs text only.
+  resolveNarration?: NarrationResolver;
 }
 
 // An exercise chosen from the list, on its intro screen and not yet started.
@@ -431,6 +442,8 @@ export default function PracticeInstrument({
   onNeedsBaseline,
   connectingLogoSrc,
   audioEnabled = true,
+  biometricsEnabled = true,
+  resolveNarration,
 }: PracticeInstrumentProps) {
   const [chosen, setChosen] = useState<Chosen | null>(null);
   // Where the person is in the library: the purpose cards, or one purpose's list.
@@ -578,8 +591,7 @@ export default function PracticeInstrument({
         strapMode: rr.length ? 'ble' : 'none',
         disconnects: disconnectsRef.current,
       },
-      // No narration plays yet, so no narrator is recorded.
-      narratorId: null,
+      narratorId: narratorIdFor(running.exercise, resolveNarration),
       accessArm: running.accessArm,
       holds: holdsRef.current,
       rrSeries: seriesRef.current,
@@ -628,7 +640,9 @@ export default function PracticeInstrument({
     gap: 16,
   };
 
-  const strapBar = (
+  // Without the armband entitlement there is nothing to connect, so the bar is
+  // never shown and the session runs on the pacer alone.
+  const strapBar = !biometricsEnabled ? null : (
     <StrapBar
       state={strap.state}
       hr={strap.latest?.heartRate || null}
@@ -642,6 +656,8 @@ export default function PracticeInstrument({
   // ----- running session -----
   if (running) {
     const { exercise } = running;
+    const narrated = narratorIdFor(exercise, resolveNarration) !== null;
+    const program = programFor(exercise, resolveNarration);
     return (
       <div style={container}>
         <div style={{ textAlign: 'center' }}>
@@ -653,18 +669,18 @@ export default function PracticeInstrument({
           </div>
         </div>
 
-        {exercise.kind === 'guided' && exercise.how ? (
+        {exercise.kind === 'guided' && exercise.how && !narrated ? (
           <div style={{ borderRadius: 12, background: '#fff', border: `1px solid ${C.mist}`, padding: '16px 20px' }}>
             <p style={{ margin: 0, fontSize: 15, lineHeight: 1.6, color: C.indigo }}>{exercise.how}</p>
             <p style={{ margin: '8px 0 0', fontSize: 12, color: C.text3 }}>
-              Narration for this visualization is coming. For now, read it, then settle into the pacer below.
+              No narration is available here, so read it, then settle into the pacer below.
             </p>
           </div>
         ) : null}
 
         {/* The session ends itself after the program's last phase. */}
         <PacerSession
-          program={exercise.program}
+          program={program}
           onComplete={() => end('completed')}
           onPhaseStart={onPhaseStart}
           onPhaseEnd={onPhaseEnd}
@@ -690,6 +706,7 @@ export default function PracticeInstrument({
   if (chosen) {
     const { exercise } = chosen;
     const setMode = (mode: Chosen['mode']) => {
+      if (mode === 'armband' && !biometricsEnabled) return;
       setChosen({ ...chosen, mode });
       if (mode === 'armband' && (strap.state === 'idle' || strap.state === 'error')) void strap.connect();
     };
@@ -760,7 +777,7 @@ export default function PracticeInstrument({
           </div>
         ) : null}
 
-        {exercise.kind !== 'field' && strap.state !== 'unsupported' ? (
+        {exercise.kind !== 'field' && (strap.state !== 'unsupported' || !biometricsEnabled) ? (
           <div style={{ textAlign: 'center' }}>
             <div
               style={{
@@ -775,17 +792,21 @@ export default function PracticeInstrument({
               How are you practicing today?
             </div>
             <div style={{ display: 'flex', gap: 8, justifyContent: 'center', flexWrap: 'wrap' }}>
-              <button type="button" style={chipStyle(chosen.mode === 'armband')} onClick={() => setMode('armband')}>
-                With my armband
-              </button>
+              {biometricsEnabled ? (
+                <button type="button" style={chipStyle(chosen.mode === 'armband')} onClick={() => setMode('armband')}>
+                  With my armband
+                </button>
+              ) : null}
               <button type="button" style={chipStyle(chosen.mode === 'pacer')} onClick={() => setMode('pacer')}>
                 Just the pacer
               </button>
             </div>
             <p style={{ margin: '6px 0 0', fontSize: 11.5, color: C.text3 }}>
-              {chosen.mode === 'armband'
-                ? 'Your session is recorded and compared against your baseline.'
-                : 'No biometrics this session. Elapsed time and the pacer only.'}
+              {!biometricsEnabled
+                ? 'The pacer and how you felt after. Armband recording comes with the Capacity Assessment bundle.'
+                : chosen.mode === 'armband'
+                  ? 'Your session is recorded and compared against your baseline.'
+                  : 'No biometrics this session. Elapsed time and the pacer only.'}
             </p>
           </div>
         ) : null}
@@ -1109,7 +1130,9 @@ export default function PracticeInstrument({
                 {arm === null ? <Pill tone="gold">{TIER_LABEL[exercise.minTier]}</Pill> : null}
                 {arm !== null && held ? <Pill tone="fire">{held}</Pill> : null}
                 <Button
-                  onClick={() => arm && !held && setChosen({ exercise, accessArm: arm, mode: 'armband' })}
+                  onClick={() =>
+                    arm && !held && setChosen({ exercise, accessArm: arm, mode: biometricsEnabled ? 'armband' : 'pacer' })
+                  }
                   disabled={!unlocked}
                 >
                   {unlocked ? 'Open' : arm === null ? `Included in ${TIER_LABEL[exercise.minTier]}` : 'Held'}

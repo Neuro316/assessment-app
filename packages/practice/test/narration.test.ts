@@ -42,3 +42,36 @@ test('narration: a full guided session with bookends runs a few minutes, not sec
     assert.ok(total >= 300 && total <= 900, `${script.exerciseId}: ${Math.round(total)} s`);
   }
 });
+
+// ----- programFor / narratorIdFor: what the instrument runs and records -----
+import { NARRATOR_VOICES, narratorIdFor, programFor, PRACTICE_LIBRARY } from '@neuroprogeny/practice';
+
+const V1 = PRACTICE_LIBRARY.find((e) => e.id === 'V1')!;
+const B1 = PRACTICE_LIBRARY.find((e) => e.id === 'B1')!;
+const allClips = (id: string) => `https://cdn.example/narration/${id}.mp3`;
+const noClips = () => null;
+
+test('programFor: a guided exercise with clips runs the narrated program inside bookends', () => {
+  const p = programFor(V1, allClips);
+  assert.notStrictEqual(p, V1.program);
+  assert.strictEqual(p.phases[0].mode, 'paced', 'pre-roll first');
+  assert.ok(p.phases.some((ph) => ph.mode === 'media'), 'clips as media phases');
+  const last = p.phases[p.phases.length - 1];
+  assert.strictEqual(last.mode, 'freeform', 'quiet post-roll last');
+});
+
+test('programFor: no resolver, or a resolver with no clips, leaves the exercise program alone', () => {
+  assert.strictEqual(programFor(V1, undefined), V1.program);
+  assert.strictEqual(programFor(V1, noClips), V1.program);
+});
+
+test('programFor: a breathing exercise is never narrated, resolver or not', () => {
+  assert.strictEqual(programFor(B1, allClips), B1.program);
+  assert.strictEqual(narratorIdFor(B1, allClips), null);
+});
+
+test('narratorIdFor: the voice of the script that played, null when nothing played', () => {
+  assert.strictEqual(narratorIdFor(V1, allClips), NARRATOR_VOICES.interoceptive.voiceId);
+  assert.strictEqual(narratorIdFor(V1, noClips), null);
+  assert.strictEqual(narratorIdFor(V1, undefined), null);
+});
