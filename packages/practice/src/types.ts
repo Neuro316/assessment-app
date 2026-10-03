@@ -3,21 +3,105 @@
 // finished practice session produces. Moved here from the assessment app's
 // src/lib/practice/ so the package and its hosts share one definition.
 
-export type PracticeCategory = 'downregulate' | 'upregulate' | 'steady';
+// The exercise's primary effect. Exercises described with two effects (e.g.
+// "steady/capacity-building") carry the first one here.
+export type PracticeCategory = 'calming' | 'steady' | 'activating';
 
 // Ordered lowest to highest: a person with access to a tier has access to every
 // tier before it.
 export type PracticeTier = 'insight' | 'practice' | 'mastery';
+
+// Where the person does the exercise. Framing text only — the strap works the same
+// either way.
+export type SessionContext = 'seated' | 'walking';
 
 export interface PracticeExercise {
   id: string;
   title: string;
   category: PracticeCategory;
   minTier: PracticeTier;
-  // Breaths per minute for the pacer. Absent for exercises with no pacer.
-  pacerRate?: number;
+  // What the session plays, phase by phase.
+  program: PacerProgram;
   narratorAudioKey?: string;
   description: string;
+  // Caution text, shown on the screen before the session starts.
+  safetyNote?: string;
+  // Defaults to 'seated'.
+  sessionContext?: SessionContext;
+  // ⚠ INERT STUB. Marks an exercise as meant to unlock only once real session
+  // history shows a steady baseline. No such history exists yet (npu-platform-v2
+  // work), so nothing reads this: canUseExercise ignores it entirely.
+  requiresBalancedBaseline?: boolean;
+}
+
+// ===== PACER PROGRAMS =====
+// An exercise's session is an ordered list of phases, played one after another.
+// The engine moves between them on its own; each mode decides when its phase ends.
+
+export type BreathRoute = 'nose' | 'mouth';
+
+// The parts of one breath, in the order they happen. A part with 0 seconds is
+// skipped.
+export type BreathPart = 'inhale' | 'secondInhale' | 'holdIn' | 'exhale' | 'holdOut';
+
+// Metered breathing with an animated pacer. Ends after durationSec (rounded up to
+// whole breaths, so a phase never stops mid-breath) or after repCount breaths.
+export interface PacedPhase {
+  mode: 'paced';
+  inhaleSec: number;
+  // A second, shorter inhale stacked on the first — the physiological sigh.
+  // Omit or 0 for an ordinary breath.
+  secondInhaleSec?: number;
+  holdAfterInhaleSec: number;
+  exhaleSec: number;
+  holdAfterExhaleSec: number;
+  inhaleRoute: BreathRoute;
+  exhaleRoute: BreathRoute;
+  // Shown for the whole phase, e.g. 'Slow' / 'Medium' / 'Fast'.
+  label?: string;
+  // Replaces the default on-screen word for a part of the breath, e.g. exhale:
+  // 'Open-mouth exhale', or inhale: 'Inhale… now begin on the exhale'.
+  cues?: Partial<Record<BreathPart, string>>;
+  durationSec?: number;
+  repCount?: number;
+}
+
+// One sustained instruction, no metered breath. With durationSec it ends on its
+// own; without, the person ends it with a button, which unlocks after
+// minDurationSec (default 0). Shows elapsed time.
+export interface FreeformPhase {
+  mode: 'freeform';
+  instruction: string;
+  route?: BreathRoute;
+  label?: string;
+  durationSec?: number;
+  minDurationSec?: number;
+  // Button text when the person ends it, e.g. 'Next round' or 'Finish'.
+  continueLabel?: string;
+}
+
+// A hold the person ends themselves with a release button. Never a countdown,
+// never a target: safetyCapSec is a backstop that releases automatically and is
+// never shown.
+export interface SelfPacedHoldPhase {
+  mode: 'self-paced-hold';
+  // 'exhale' = holding with empty lungs, 'inhale' = holding with full lungs.
+  holdOn: 'inhale' | 'exhale';
+  instruction: string;
+  safetyCapSec: number;
+  label?: string;
+}
+
+// Set by the rounds() helper on every phase it repeats, so the session can show
+// "Round 2 of 4". Not written by hand.
+export interface PhaseRound {
+  round?: { current: number; total: number };
+}
+
+export type PacerPhase = (PacedPhase | FreeformPhase | SelfPacedHoldPhase) & PhaseRound;
+
+export interface PacerProgram {
+  phases: PacerPhase[];
 }
 
 // Which arm of canUseExercise granted the session.
@@ -83,6 +167,18 @@ export interface PracticeSamplesSummary {
   disconnects: number;
 }
 
+// One self-paced hold, as it actually happened.
+//   round    — the round it belonged to, or null outside a rounds() group
+//   heldMs   — how long it lasted
+//   endedBy  — 'person' when they released it; 'safety-cap' when the backstop did;
+//              'abandoned' when the session ended early while the hold was still
+//              open (heldMs is then the time held up to that moment)
+export interface PracticeHoldRecord {
+  round: number | null;
+  heldMs: number;
+  endedBy: 'person' | 'safety-cap' | 'abandoned';
+}
+
 // Handed to the host's onRecordSession when a session ends. The host decides what
 // to do with it; the package makes no network calls.
 export interface PracticeSessionRecord {
@@ -97,4 +193,7 @@ export interface PracticeSessionRecord {
   samplesSummary: PracticeSamplesSummary;
   narratorId: string | null;
   accessArm: PracticeAccessArm;
+  // Every self-paced hold completed in the session, in order. Empty for exercises
+  // without one.
+  holds: PracticeHoldRecord[];
 }

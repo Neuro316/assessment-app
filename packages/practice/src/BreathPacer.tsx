@@ -1,12 +1,14 @@
 // ===== BREATH PACER =====
-// Adapted from the assessment app's src/components/BreathPacer.tsx: same props and
-// same easing, but it fills its container (square, capped at MAX_SIZE) and is
-// styled inline, so it renders correctly without the host's Tailwind.
+// The circle that grows on the inhale and settles on the exhale. Adapted from the
+// assessment app's src/components/BreathPacer.tsx — same look — but it no longer
+// keeps its own clock: the pacer engine (pacer.ts / usePacerProgram) works out
+// where the breath is, including holds and a stacked second inhale, and this just
+// draws it. Fills its container (square, capped at MAX_SIZE), styled inline so it
+// renders without the host's Tailwind.
 //
-// rate        — breaths per minute
-// inhaleRatio — share of each breath cycle spent inhaling (0-1), default 0.5
-
-import { useEffect, useState } from 'react';
+// amplitude — 0 = empty lungs (smallest), 1 = full (largest)
+// word      — the cue in the middle, e.g. 'Inhale' / 'Hold'
+// route     — optional line under it, e.g. 'in through the nose'
 
 const C = {
   blue: '#386797',
@@ -16,41 +18,16 @@ const C = {
 
 const MAX_SIZE = 360;
 
-// Keeps both halves of the breath long enough to be visible, and avoids a
-// divide by zero at the extremes.
-const MIN_RATIO = 0.05;
-const MAX_RATIO = 0.95;
-
 export default function BreathPacer({
-  rate,
-  inhaleRatio = 0.5,
+  amplitude,
+  word,
+  route,
 }: {
-  rate: number;
-  inhaleRatio?: number;
+  amplitude: number;
+  word: string;
+  route?: string | null;
 }) {
-  const [frac, setFrac] = useState(0);
-
-  useEffect(() => {
-    const start = performance.now();
-    const period = (60 / rate) * 1000;
-    let raf = 0;
-    const loop = (t: number) => {
-      setFrac(((t - start) % period) / period);
-      raf = requestAnimationFrame(loop);
-    };
-    raf = requestAnimationFrame(loop);
-    return () => cancelAnimationFrame(raf);
-  }, [rate]);
-
-  const ratio = Math.min(MAX_RATIO, Math.max(MIN_RATIO, inhaleRatio));
-  const inhaling = frac < ratio;
-
-  // Sinusoidal breath: 0 at the bottom of the exhale, 1 at the top of the inhale.
-  // Each half is its own half-cosine, so an uneven split still eases in and out
-  // of both turns. At ratio 0.5 this is exactly (1 - cos(2π·frac)) / 2.
-  const amp = inhaling
-    ? (1 - Math.cos((Math.PI * frac) / ratio)) / 2
-    : (1 + Math.cos((Math.PI * (frac - ratio)) / (1 - ratio))) / 2;
+  const amp = Math.min(1, Math.max(0, amplitude));
   const scale = 0.4 + amp * 0.6;
 
   return (
@@ -88,19 +65,23 @@ export default function BreathPacer({
           willChange: 'transform',
         }}
       />
-      <div
-        style={{
-          position: 'relative',
-          fontSize: 14,
-          lineHeight: '20px',
-          letterSpacing: '0.28em',
-          textTransform: 'uppercase',
-          fontWeight: 500,
-          color: C.indigo,
-          opacity: 0.85,
-        }}
-      >
-        {inhaling ? 'Inhale' : 'Exhale'}
+      <div style={{ position: 'relative', textAlign: 'center', padding: '0 12%' }}>
+        <div
+          style={{
+            fontSize: 14,
+            lineHeight: '20px',
+            letterSpacing: '0.28em',
+            textTransform: 'uppercase',
+            fontWeight: 500,
+            color: C.indigo,
+            opacity: 0.85,
+          }}
+        >
+          {word}
+        </div>
+        {route ? (
+          <div style={{ fontSize: 13, marginTop: 6, color: C.indigo, opacity: 0.6 }}>{route}</div>
+        ) : null}
       </div>
     </div>
   );

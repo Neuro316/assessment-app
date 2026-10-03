@@ -167,7 +167,7 @@ export function usePracticeStrap(options: UsePracticeStrapOptions = {}): Practic
     if (!unsupportedRef.current) setState('idle');
   }, []);
 
-  // Release the strap and its wake lock when the host unmounts us.
+  // Release the strap when the host unmounts us.
   useEffect(
     () => () => {
       connectionRef.current?.disconnect();
