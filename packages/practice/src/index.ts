@@ -11,30 +11,26 @@ export type {
 } from './usePracticeStrap';
 export type { HRDataPoint } from './bluetooth';
 
+// For authoring exercise programs: repeats a group of phases as numbered rounds.
+export { rounds } from './pacer';
+
 export { canUseExercise } from './types';
 export type {
+  BreathPart,
+  BreathRoute,
+  FreeformPhase,
+  PacedPhase,
+  PacerPhase,
+  PacerProgram,
   PracticeAccessArm,
   PracticeCategory,
   PracticeExercise,
+  PracticeHoldRecord,
   PracticePerson,
   PracticeSamplesSummary,
   PracticeSessionMetrics,
   PracticeSessionRecord,
   PracticeTier,
+  SelfPacedHoldPhase,
+  SessionContext,
 } from './types';
-
-export { breathDurationMs, cueFor, MIN_FULLY_CUED_BREATH_MS } from './pacer-engine';
-export type { BreathPhase, BreathPhaseKind, BreathPattern } from './pacer-engine';
-
-export { BREATHING_LIBRARY } from './extended-breath-patterns';
-export type { ExerciseStage, PracticeBreathExercise } from './extended-breath-patterns';
-
-export { ACTIVATING_PATTERNS } from './activating-patterns';
-
-export { useBreathPattern, isHoldPhase } from './use-breath-pattern';
-export type { BreathPatternState, UseBreathPatternOptions } from './use-breath-pattern';
-
-export { useWakeLock } from './use-wake-lock';
-
-export { recordHoldOutcome } from './hold-recording';
-export type { HoldEndedBy, HoldRecord } from './hold-recording';

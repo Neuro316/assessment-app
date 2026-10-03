@@ -13,17 +13,22 @@
 
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 
-import BreathPacer from './BreathPacer';
+import { primeAudio } from './audio';
 import type { HRDataPoint } from './bluetooth';
 import { computeSessionMetrics, emptySessionMetrics } from './hrv-metrics';
+import PacerSession from './PacerSession';
 import type {
   PracticeAccessArm,
   PracticeExercise,
+  PracticeHoldRecord,
   PracticeSessionMetrics,
   PracticeSessionRecord,
   PracticeTier,
+  SessionContext,
 } from './types';
+import type { PhaseEnd, PhaseStart } from './usePacerProgram';
 import { usePracticeStrap, type PracticeStrapState } from './usePracticeStrap';
+import { useSessionWakeLock } from './useSessionWakeLock';
 
 const C = {
   blue: '#386797',
@@ -53,14 +58,27 @@ export interface PracticeInstrumentProps {
   // of a round mark works best. The package ships no brand assets of its own, so
   // without this a plain spinner is shown instead.
   connectingLogoSrc?: string;
+  // Tone cues during a session. Default true; false for a silent session.
+  audioEnabled?: boolean;
 }
 
-interface RunningSession {
+// An exercise chosen from the list, on its intro screen and not yet started.
+interface Chosen {
   exercise: PracticeExercise;
-  startedAt: number;
-  // Taken when the session starts, so the record says what granted it then.
+  // Taken when the exercise is chosen, so the record says what granted it then.
   accessArm: PracticeAccessArm;
 }
+
+interface RunningSession extends Chosen {
+  startedAt: number;
+}
+
+// How to set up, by where the exercise happens. Framing only.
+const CONTEXT_FRAMING: Record<SessionContext, string> = {
+  seated: 'Find a comfortable seat where you can stay still for the whole session.',
+  walking:
+    'Find a safe place to walk at an easy pace — away from traffic, water and anything you need to watch closely.',
+};
 
 interface Finished {
   exercise: PracticeExercise;
@@ -256,7 +274,9 @@ export default function PracticeInstrument({
   onRecordSession,
   onNeedsBaseline,
   connectingLogoSrc,
+  audioEnabled = true,
 }: PracticeInstrumentProps) {
+  const [chosen, setChosen] = useState<Chosen | null>(null);
   const [running, setRunning] = useState<RunningSession | null>(null);
   const [finished, setFinished] = useState<Finished | null>(null);
   const [now, setNow] = useState(() => Date.now());
@@ -266,6 +286,30 @@ export default function PracticeInstrument({
   const rrRef = useRef<number[]>([]);
   const collectingRef = useRef(false);
   const disconnectsRef = useRef(0);
+  const holdsRef = useRef<PracticeHoldRecord[]>([]);
+  // The self-paced hold in progress, if any — so ending the session early can still
+  // record it as 'abandoned'.
+  const openHoldRef = useRef<{ round: number | null; startedAt: number } | null>(null);
+
+  // Screen stays awake for the whole session, strap or no strap.
+  useSessionWakeLock(running !== null);
+
+  const onPhaseStart = useCallback(({ phase, startedAt }: PhaseStart) => {
+    openHoldRef.current =
+      phase.mode === 'self-paced-hold' ? { round: phase.round?.current ?? null, startedAt } : null;
+  }, []);
+
+  const onPhaseEnd = useCallback(({ phase, elapsedMs, endedBy }: PhaseEnd) => {
+    if (phase.mode !== 'self-paced-hold') return;
+    // Closed properly, so it is no longer open. Cleared before anything else: when
+    // a hold is the last phase, the session's end runs straight after this.
+    openHoldRef.current = null;
+    holdsRef.current.push({
+      round: phase.round?.current ?? null,
+      heldMs: Math.round(elapsedMs),
+      endedBy: endedBy === 'person' ? 'person' : 'safety-cap',
+    });
+  }, []);
 
   const onData = useCallback((d: HRDataPoint) => {
     if (collectingRef.current && d.rrIntervals.length) rrRef.current.push(...d.rrIntervals);
@@ -283,18 +327,25 @@ export default function PracticeInstrument({
     return () => clearInterval(id);
   }, [running]);
 
-  const start = useCallback((exercise: PracticeExercise, accessArm: PracticeAccessArm) => {
+  // Called from the Begin tap: that gesture is what lets the tone cues play.
+  const start = useCallback((choice: Chosen) => {
+    primeAudio();
     rrRef.current = [];
     disconnectsRef.current = 0;
+    holdsRef.current = [];
+    openHoldRef.current = null;
     collectingRef.current = true;
     setFinished(null);
+    setChosen(null);
     setNow(Date.now());
-    setRunning({ exercise, startedAt: Date.now(), accessArm });
+    setRunning({ ...choice, startedAt: Date.now() });
   }, []);
 
   const cancel = useCallback(() => {
     collectingRef.current = false;
     rrRef.current = [];
+    holdsRef.current = [];
+    openHoldRef.current = null;
     setRunning(null);
   }, []);
 
@@ -303,6 +354,17 @@ export default function PracticeInstrument({
     collectingRef.current = false;
     const endedAt = Date.now();
     const rr = rrRef.current;
+
+    // Ended early mid-hold: record the hold as it stood, rather than drop it.
+    const openHold = openHoldRef.current;
+    if (openHold) {
+      holdsRef.current.push({
+        round: openHold.round,
+        heldMs: Math.max(0, endedAt - openHold.startedAt),
+        endedBy: 'abandoned',
+      });
+      openHoldRef.current = null;
+    }
 
     // Computed once, here, over the whole session.
     const metrics: PracticeSessionMetrics =
@@ -326,9 +388,11 @@ export default function PracticeInstrument({
       // No narration plays yet, so no narrator is recorded.
       narratorId: null,
       accessArm: running.accessArm,
+      holds: holdsRef.current,
     };
 
     rrRef.current = [];
+    holdsRef.current = [];
     setRunning(null);
     setFinished({ exercise: running.exercise, record });
     onRecordSession(record);
@@ -365,21 +429,19 @@ export default function PracticeInstrument({
           <div style={{ fontSize: 12, letterSpacing: '0.14em', textTransform: 'uppercase', color: C.blue }}>
             {exercise.title}
           </div>
-          <div style={{ fontSize: 40, fontWeight: 300, color: C.indigo, fontVariantNumeric: 'tabular-nums' }}>
+          <div style={{ fontSize: 13, opacity: 0.5, fontVariantNumeric: 'tabular-nums' }}>
             {formatTime(now - running.startedAt)}
           </div>
-          {exercise.pacerRate ? (
-            <div style={{ fontSize: 13, opacity: 0.55 }}>{exercise.pacerRate.toFixed(1)} breaths / min</div>
-          ) : null}
         </div>
 
-        {exercise.pacerRate ? (
-          <BreathPacer rate={exercise.pacerRate} />
-        ) : (
-          <p style={{ textAlign: 'center', fontSize: 14, lineHeight: 1.6, opacity: 0.72 }}>
-            {exercise.description}
-          </p>
-        )}
+        {/* The session ends itself after the program's last phase. */}
+        <PacerSession
+          program={exercise.program}
+          onComplete={end}
+          onPhaseStart={onPhaseStart}
+          onPhaseEnd={onPhaseEnd}
+          audioEnabled={audioEnabled}
+        />
 
         {strapBar}
 
@@ -387,7 +449,61 @@ export default function PracticeInstrument({
           <Button variant="secondary" onClick={cancel}>
             Cancel
           </Button>
-          <Button onClick={end}>End session</Button>
+          <Button variant="secondary" onClick={end}>
+            End early
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
+  // ----- intro: set-up and safety, before anything starts -----
+  if (chosen) {
+    const { exercise } = chosen;
+    return (
+      <div style={container}>
+        <div style={{ borderRadius: 16, background: '#fff', border: `1px solid ${C.mist}`, padding: 24 }}>
+          <h2 style={{ margin: '0 0 8px', fontSize: 20, color: C.indigo }}>{exercise.title}</h2>
+          <p style={{ margin: '0 0 16px', fontSize: 14, lineHeight: 1.6, opacity: 0.75 }}>{exercise.description}</p>
+          <p style={{ margin: 0, fontSize: 14, lineHeight: 1.6, color: C.indigo }}>
+            {CONTEXT_FRAMING[exercise.sessionContext ?? 'seated']}
+          </p>
+        </div>
+
+        {exercise.safetyNote ? (
+          <div
+            role="note"
+            style={{
+              borderRadius: 16,
+              padding: 20,
+              background: `${C.red}12`,
+              border: `1px solid ${C.red}55`,
+              color: C.charcoal,
+            }}
+          >
+            <div
+              style={{
+                fontSize: 12,
+                letterSpacing: '0.14em',
+                textTransform: 'uppercase',
+                fontWeight: 600,
+                color: C.red,
+                marginBottom: 6,
+              }}
+            >
+              Before you start
+            </div>
+            <p style={{ margin: 0, fontSize: 14, lineHeight: 1.6 }}>{exercise.safetyNote}</p>
+          </div>
+        ) : null}
+
+        {strapBar}
+
+        <div style={{ display: 'flex', gap: 12, justifyContent: 'center' }}>
+          <Button variant="secondary" onClick={() => setChosen(null)}>
+            Back
+          </Button>
+          <Button onClick={() => start(chosen)}>Begin</Button>
         </div>
       </div>
     );
@@ -494,7 +610,7 @@ export default function PracticeInstrument({
                   </div>
                 ) : null}
               </div>
-              <Button onClick={() => arm && start(exercise, arm)} disabled={!unlocked}>
+              <Button onClick={() => arm && setChosen({ exercise, accessArm: arm })} disabled={!unlocked}>
                 {unlocked ? 'Start' : 'Locked'}
               </Button>
             </li>

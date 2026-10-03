@@ -3,7 +3,8 @@
 // same parsing; differences:
 //   - typed against @types/web-bluetooth rather than // @ts-nocheck
 //   - every characteristicvaluechanged listener is removed on teardown
-//   - the screen wake lock is held as a sentinel and released on teardown
+//   - no screen wake lock here: the screen is kept awake by the practice session
+//     (useSessionWakeLock), for as long as a session runs, strap or no strap
 //
 // BLE Heart Rate Service 0x180D, Characteristic 0x2A37
 // RR intervals at 1/1024 second resolution
@@ -195,20 +196,14 @@ async function attachToDevice(
   if (!gatt) throw new Error('This device does not expose a GATT server.');
 
   const subscriptions: Subscription[] = [];
-  let wakeLock: WakeLockSentinel | null = null;
 
   // Everything this connection attached, detached in one place. Runs on a
   // deliberate disconnect and on an unexpected drop alike, so neither path leaves
-  // listeners or a wake lock behind.
+  // listeners behind.
   const release = () => {
     device.removeEventListener('gattserverdisconnected', onDrop);
     for (const { characteristic, listener } of subscriptions.splice(0)) {
       characteristic.removeEventListener('characteristicvaluechanged', listener);
-    }
-    if (wakeLock) {
-      const sentinel = wakeLock;
-      wakeLock = null;
-      sentinel.release().catch(() => {});
     }
   };
 
@@ -304,16 +299,6 @@ async function attachToDevice(
     throw e;
   } finally {
     clearTimeout(timer);
-  }
-
-  // Keep the screen awake for the session. Held so disconnect can release it
-  // rather than waiting for the browser to drop it when the tab is hidden.
-  try {
-    if ('wakeLock' in navigator) {
-      wakeLock = await navigator.wakeLock.request('screen');
-    }
-  } catch {
-    // Refused (no permission, hidden tab, or a frame without screen-wake-lock).
   }
 
   return {
