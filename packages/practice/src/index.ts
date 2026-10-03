@@ -15,8 +15,17 @@ export type { HRDataPoint } from './bluetooth';
 export { rounds } from './pacer';
 
 export { canUseExercise } from './types';
+
+// The full library (38 exercises across breathing, visualization and
+// mindfulness) and the purposes the library screen groups on.
+export { PRACTICE_LIBRARY, PRACTICE_EXERCISES, PRACTICE_PURPOSES } from './library';
 export type {
   BreathPart,
+  EvidenceTier,
+  PracticeAxis,
+  PracticeFamily,
+  PracticeKind,
+  PracticePurpose,
   BreathRoute,
   FreeformPhase,
   PacedPhase,

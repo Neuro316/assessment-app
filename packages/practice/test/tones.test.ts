@@ -9,7 +9,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { PRACTICE_EXERCISES } from '../../../src/lib/practice/exercises';
+import { PRACTICE_EXERCISES } from '../src/library';
 import { CUE } from '../src/audio';
 import { pacedTotalMs } from '../src/pacer';
 import { cueFor } from '../src/PacerSession';

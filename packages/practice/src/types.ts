@@ -15,11 +15,42 @@ export type PracticeTier = 'insight' | 'practice' | 'mastery';
 // either way.
 export type SessionContext = 'seated' | 'walking';
 
+// The three source libraries. Breathing is paced by the engine; visualization is
+// guided (narration is stage two, the resonance pacer runs underneath until
+// then); mindfulness experiments are done during an ordinary day and logged
+// afterward, so their "session" is a note, not a pacer run.
+export type PracticeFamily = 'breathing' | 'visualization' | 'mindfulness';
+export type PracticeKind = 'paced' | 'guided' | 'field';
+
+// What the person wants right now. The library screen groups on this.
+export type PracticePurpose = 'settle' | 'steady' | 'energize' | 'recover' | 'prepare' | 'train';
+
+// Which of the measurable axes (fluidity spec, section 2) the exercise trains.
+// Free text because several exercises train a pairing, and the spec names six.
+export type PracticeAxis = string;
+
+// Evidence tier (fluidity spec, section 12). Governs what a card may claim, not
+// what is computed: 1 may be described plainly, 2 as a practice with no claimed
+// mechanism, 3 is never surfaced as a claim to a participant.
+export type EvidenceTier = 1 | 2 | 3;
+
 export interface PracticeExercise {
   id: string;
   title: string;
   category: PracticeCategory;
   minTier: PracticeTier;
+  // Defaults: family 'breathing', kind 'paced'. Set on every library entry.
+  family?: PracticeFamily;
+  kind?: PracticeKind;
+  purpose?: PracticePurpose;
+  axis?: PracticeAxis;
+  // When it belongs, in the source's own words ("Waiting on a backed-up tee").
+  moment?: string;
+  evidenceTier?: EvidenceTier;
+  // Guided and field exercises carry the source's own instruction and placement
+  // text, shown in full on the session screen.
+  how?: string;
+  where?: string;
   // What the session plays, phase by phase.
   program: PacerProgram;
   narratorAudioKey?: string;

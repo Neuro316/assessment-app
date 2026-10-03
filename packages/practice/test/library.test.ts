@@ -1,5 +1,5 @@
 // ===== EXERCISE LIBRARY TESTS =====
-// The app's exercise library (src/lib/practice/exercises.ts) checked against the
+// The package's exercise library (src/library.ts) checked against the
 // engine: every exercise has a finite program, and the shapes that matter most
 // (the sigh, the box, B13's hold cap) are what they claim to be.
 //
@@ -9,7 +9,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { PRACTICE_EXERCISES } from '../../../src/lib/practice/exercises';
+import { PRACTICE_EXERCISES } from '../src/library';
 import { autoEndMs, pacedCue, pacedStateAt, pacedTotalMs } from '../src/pacer';
 
 const ex = (id: string) => {
@@ -18,13 +18,45 @@ const ex = (id: string) => {
   return found;
 };
 
-const EXPECTED_IDS = ['B1', 'B2', 'B3', 'B4', 'B5', 'B6', 'B7', 'B10', 'B11', 'B12', 'B13', 'B14', 'B15', 'B16'];
+const BREATHING_IDS = ['B1', 'B2', 'B3', 'B4', 'B5', 'B6', 'B7', 'B10', 'B11', 'B12', 'B13', 'B14', 'B15', 'B16'];
+const V_IDS = Array.from({ length: 12 }, (_, i) => `V${i + 1}`);
+const M_IDS = Array.from({ length: 12 }, (_, i) => `M${i + 1}`);
+const EXPECTED_IDS = [...BREATHING_IDS, ...V_IDS, ...M_IDS];
 
-test('library: 14 exercises, the expected ids', () => {
+test('library: 38 exercises, the expected ids', () => {
   assert.deepEqual(
     PRACTICE_EXERCISES.map((e) => e.id).sort(),
     [...EXPECTED_IDS].sort()
   );
+});
+
+test('library: 14 paced breathing, 12 guided visualization, 12 field mindfulness', () => {
+  const by = (k: string) => PRACTICE_EXERCISES.filter((e) => e.kind === k).map((e) => e.id).sort();
+  assert.deepEqual(by('paced'), [...BREATHING_IDS].sort());
+  assert.deepEqual(by('guided'), [...V_IDS].sort());
+  assert.deepEqual(by('field'), [...M_IDS].sort());
+  for (const e of PRACTICE_EXERCISES) {
+    const fam = e.id[0] === 'B' ? 'breathing' : e.id[0] === 'V' ? 'visualization' : 'mindfulness';
+    assert.equal(e.family, fam, `${e.id} family`);
+  }
+});
+
+test('library: every entry carries purpose, axis, moment and evidence tier', () => {
+  const purposes = new Set(['settle', 'steady', 'energize', 'recover', 'prepare', 'train']);
+  for (const e of PRACTICE_EXERCISES) {
+    assert.ok(e.purpose && purposes.has(e.purpose), `${e.id} purpose`);
+    assert.ok(e.axis && e.axis.length > 0, `${e.id} axis`);
+    assert.ok(e.moment && e.moment.length > 0, `${e.id} moment`);
+    assert.ok([1, 2, 3].includes(e.evidenceTier as number), `${e.id} evidence tier`);
+  }
+});
+
+test('library: guided and field entries carry the source text and a runnable program', () => {
+  for (const e of PRACTICE_EXERCISES.filter((x) => x.kind !== 'paced')) {
+    assert.ok(e.how && e.how.length > 20, `${e.id} how`);
+    assert.ok(e.where && e.where.length > 10, `${e.id} where`);
+    assert.ok(e.program.phases.length >= 1, `${e.id} has a program`);
+  }
 });
 
 test('library: ids are unique', () => {

@@ -23,9 +23,8 @@ import {
   type PracticeExercise,
   type PracticePerson,
   type PracticeSessionRecord,
+  PRACTICE_EXERCISES,
 } from '@neuroprogeny/practice';
-
-import { PRACTICE_EXERCISES } from '@/lib/practice/exercises';
 
 // ===== STUB DATA — TEMPORARY, NOT REAL =====
 // None of this comes from a database or an authenticated person. It exists only so
