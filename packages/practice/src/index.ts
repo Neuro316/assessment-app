@@ -13,6 +13,9 @@ export type { HRDataPoint } from './bluetooth';
 
 // For authoring exercise programs: repeats a group of phases as numbered rounds.
 export { rounds } from './pacer';
+// Wraps a program in the paced pre-roll and quiet post-roll the fluidity spec
+// asks every event-locked (media) session to carry.
+export { withBookends } from './pacer';
 
 export { canUseExercise } from './types';
 
@@ -28,6 +31,10 @@ export type {
   PracticePurpose,
   BreathRoute,
   FreeformPhase,
+  MediaAsset,
+  MediaPhase,
+  RRSample,
+  SessionEvent,
   PacedPhase,
   PacerPhase,
   PacerProgram,

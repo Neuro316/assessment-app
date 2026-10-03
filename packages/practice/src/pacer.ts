@@ -4,7 +4,7 @@
 // over. No React, no timers — usePacerProgram drives these with a clock, and they
 // can be tested without one.
 
-import type { BreathPart, BreathRoute, PacedPhase, PacerPhase } from './types';
+import type { BreathPart, BreathRoute, PacedPhase, PacerPhase, PacerProgram } from './types';
 
 // ----- authoring helper -----
 
@@ -174,6 +174,10 @@ export function autoEndMs(phase: PacerPhase): number | null {
     case 'self-paced-hold':
       // The safety backstop. Never displayed.
       return phase.safetyCapSec * 1000;
+    case 'media':
+      // A track ends the phase itself when it finishes; durationSec is a cap, or
+      // the whole length for an image or text step.
+      return phase.durationSec !== undefined ? phase.durationSec * 1000 : null;
   }
 }
 
@@ -189,5 +193,52 @@ export function manualEnd(phase: PacerPhase, elapsedMs: number): { label: string
     }
     case 'self-paced-hold':
       return { label: 'Release — breathe', enabled: true };
+    case 'media': {
+      const min = (phase.minDurationSec ?? 0) * 1000;
+      const isTrack = phase.asset.kind === 'audio' || phase.asset.kind === 'video';
+      // A track plays itself out; the button only skips. A step with a duration
+      // ends on its own and offers no button at all.
+      if (!isTrack && phase.durationSec !== undefined) return null;
+      return { label: phase.continueLabel ?? (isTrack ? 'Skip' : 'Continue'), enabled: elapsedMs >= min };
+    }
   }
+}
+
+// ----- bookends -----
+
+// Wraps a program in the quiet reference segments the fluidity spec asks every
+// event-locked session to carry: a paced resonance pre-roll (the lag-calibration
+// segment, and the within-session reference every event is measured against) and
+// a quiet post-roll long enough for recovery time to be measurable. Defaults are
+// the spec's: 90 s pre-roll, 180 s post-roll.
+export function withBookends(
+  program: PacerProgram,
+  opts: { preRollSec?: number; postRollSec?: number } = {}
+): PacerProgram {
+  const pre = opts.preRollSec ?? 90;
+  const post = opts.postRollSec ?? 180;
+  const phases: PacerPhase[] = [];
+  if (pre > 0) {
+    phases.push({
+      mode: 'paced',
+      inhaleSec: 5.5,
+      holdAfterInhaleSec: 0,
+      exhaleSec: 5.5,
+      holdAfterExhaleSec: 0,
+      inhaleRoute: 'nose',
+      exhaleRoute: 'nose',
+      label: 'Settling in',
+      durationSec: pre,
+    });
+  }
+  phases.push(...program.phases);
+  if (post > 0) {
+    phases.push({
+      mode: 'freeform',
+      label: 'Stay seated',
+      instruction: 'Stay seated and breathe easily until the bell.',
+      durationSec: post,
+    });
+  }
+  return { phases };
 }

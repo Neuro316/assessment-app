@@ -15,6 +15,7 @@ import { useCallback, useEffect, useRef, useState, type CSSProperties, type Reac
 
 import { primeAudio } from './audio';
 import type { HRDataPoint } from './bluetooth';
+import type { RRSample, SessionEvent } from './types';
 import { computeSessionMetrics, emptySessionMetrics } from './hrv-metrics';
 import PacerSession from './PacerSession';
 import type {
@@ -60,6 +61,9 @@ export interface PracticeInstrumentProps {
   connectingLogoSrc?: string;
   // Tone cues during a session. Default true; false for a silent session.
   audioEnabled?: boolean;
+  // How many times this person has done the chosen exercise before, plus one,
+  // when the host knows. Written into the record as listenNumber.
+  listenNumber?: number;
 }
 
 // An exercise chosen from the list, on its intro screen and not yet started.
@@ -272,6 +276,7 @@ export default function PracticeInstrument({
   exercises,
   canUseExercise,
   onRecordSession,
+  listenNumber,
   onNeedsBaseline,
   connectingLogoSrc,
   audioEnabled = true,
@@ -284,6 +289,9 @@ export default function PracticeInstrument({
   // The session's raw stream. Refs, not state: they change on every beat and
   // nothing renders from them until the session ends.
   const rrRef = useRef<number[]>([]);
+  // The same beats with per-beat timestamps, for the record's rrSeries.
+  const seriesRef = useRef<RRSample[]>([]);
+  const eventsRef = useRef<SessionEvent[]>([]);
   const collectingRef = useRef(false);
   const disconnectsRef = useRef(0);
   const holdsRef = useRef<PracticeHoldRecord[]>([]);
@@ -294,13 +302,21 @@ export default function PracticeInstrument({
   // Screen stays awake for the whole session, strap or no strap.
   useSessionWakeLock(running !== null);
 
-  const onPhaseStart = useCallback(({ phase, startedAt }: PhaseStart) => {
+  const logEvent = useCallback((e: SessionEvent) => {
+    if (collectingRef.current) eventsRef.current.push(e);
+  }, []);
+
+  const onPhaseStart = useCallback(({ phase, index, startedAt }: PhaseStart) => {
+    eventsRef.current.push({ t: startedAt, type: 'phase-start', index, mode: phase.mode, label: phase.label });
     openHoldRef.current =
       phase.mode === 'self-paced-hold' ? { round: phase.round?.current ?? null, startedAt } : null;
   }, []);
 
-  const onPhaseEnd = useCallback(({ phase, elapsedMs, endedBy }: PhaseEnd) => {
+  const onPhaseEnd = useCallback(({ phase, index, elapsedMs, endedBy }: PhaseEnd) => {
+    const t = Date.now();
+    eventsRef.current.push({ t, type: 'phase-end', index, endedBy });
     if (phase.mode !== 'self-paced-hold') return;
+    if (endedBy === 'person') eventsRef.current.push({ t, type: 'hold-release', index });
     // Closed properly, so it is no longer open. Cleared before anything else: when
     // a hold is the last phase, the session's end runs straight after this.
     openHoldRef.current = null;
@@ -312,10 +328,23 @@ export default function PracticeInstrument({
   }, []);
 
   const onData = useCallback((d: HRDataPoint) => {
-    if (collectingRef.current && d.rrIntervals.length) rrRef.current.push(...d.rrIntervals);
+    if (!collectingRef.current || !d.rrIntervals.length) return;
+    rrRef.current.push(...d.rrIntervals);
+    // A packet can carry two or three intervals describing beats that already
+    // happened. The last beat gets the packet's arrival time; each earlier one
+    // sits one interval further back, so none is stamped late.
+    let t = d.timestamp;
+    const stamped: RRSample[] = [];
+    for (let i = d.rrIntervals.length - 1; i >= 0; i--) {
+      stamped.unshift({ t, rr: d.rrIntervals[i] });
+      t -= d.rrIntervals[i];
+    }
+    seriesRef.current.push(...stamped);
   }, []);
   const onDropped = useCallback(() => {
-    if (collectingRef.current) disconnectsRef.current += 1;
+    if (!collectingRef.current) return;
+    disconnectsRef.current += 1;
+    eventsRef.current.push({ t: Date.now(), type: 'strap-drop' });
   }, []);
 
   const strap = usePracticeStrap({ onData, onDropped });
@@ -331,10 +360,12 @@ export default function PracticeInstrument({
   const start = useCallback((choice: Chosen) => {
     primeAudio();
     rrRef.current = [];
+    seriesRef.current = [];
     disconnectsRef.current = 0;
     holdsRef.current = [];
     openHoldRef.current = null;
     collectingRef.current = true;
+    eventsRef.current = [{ t: Date.now(), type: 'session-start' }];
     setFinished(null);
     setChosen(null);
     setNow(Date.now());
@@ -344,15 +375,18 @@ export default function PracticeInstrument({
   const cancel = useCallback(() => {
     collectingRef.current = false;
     rrRef.current = [];
+    seriesRef.current = [];
+    eventsRef.current = [];
     holdsRef.current = [];
     openHoldRef.current = null;
     setRunning(null);
   }, []);
 
-  const end = useCallback(() => {
+  const end = useCallback((endedBy: 'completed' | 'abandoned' = 'completed') => {
     if (!running) return;
-    collectingRef.current = false;
     const endedAt = Date.now();
+    eventsRef.current.push({ t: endedAt, type: 'session-end', endedBy });
+    collectingRef.current = false;
     const rr = rrRef.current;
 
     // Ended early mid-hold: record the hold as it stood, rather than drop it.
@@ -389,14 +423,19 @@ export default function PracticeInstrument({
       narratorId: null,
       accessArm: running.accessArm,
       holds: holdsRef.current,
+      rrSeries: seriesRef.current,
+      events: eventsRef.current,
+      listenNumber: listenNumber ?? null,
     };
 
     rrRef.current = [];
+    seriesRef.current = [];
+    eventsRef.current = [];
     holdsRef.current = [];
     setRunning(null);
     setFinished({ exercise: running.exercise, record });
     onRecordSession(record);
-  }, [running, strap.state, onRecordSession]);
+  }, [running, strap.state, onRecordSession, listenNumber]);
 
   const container: CSSProperties = {
     width: '100%',
@@ -437,9 +476,10 @@ export default function PracticeInstrument({
         {/* The session ends itself after the program's last phase. */}
         <PacerSession
           program={exercise.program}
-          onComplete={end}
+          onComplete={() => end('completed')}
           onPhaseStart={onPhaseStart}
           onPhaseEnd={onPhaseEnd}
+          onEvent={logEvent}
           audioEnabled={audioEnabled}
         />
 
@@ -449,7 +489,7 @@ export default function PracticeInstrument({
           <Button variant="secondary" onClick={cancel}>
             Cancel
           </Button>
-          <Button variant="secondary" onClick={end}>
+          <Button variant="secondary" onClick={() => end('abandoned')}>
             End early
           </Button>
         </div>

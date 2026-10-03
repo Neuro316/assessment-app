@@ -129,7 +129,62 @@ export interface PhaseRound {
   round?: { current: number; total: number };
 }
 
-export type PacerPhase = (PacedPhase | FreeformPhase | SelfPacedHoldPhase) & PhaseRound;
+// One piece of uploaded content: an audio or video track, an image, or a block of
+// text. Media is referenced by URL; the package never fetches or stores it.
+export interface MediaAsset {
+  kind: 'audio' | 'video' | 'image' | 'text';
+  // URL for audio, video and image. Signed storage URLs are fine.
+  src?: string;
+  // The text itself, for kind 'text'.
+  text?: string;
+  // Known length of an audio or video track, when the host has it.
+  durationSec?: number;
+  title?: string;
+}
+
+// Plays or shows one MediaAsset while the strap records. This is the custom-
+// exercise mode: a facilitator's uploaded track, or a step in a text and image
+// sequence. Audio and video end the phase when the track ends (or at durationSec
+// as a cap); image and text end at durationSec, or by the person's button when no
+// duration is set. Every position tick, pause, play and seek is logged as a
+// SessionEvent on the session clock, which is what lets a session be analysed in
+// track time rather than wall time.
+export interface MediaPhase {
+  mode: 'media';
+  asset: MediaAsset;
+  label?: string;
+  // Shown above the media, e.g. "Listen with your eyes closed."
+  instruction?: string;
+  durationSec?: number;
+  minDurationSec?: number;
+  // Button text for an untimed image or text step, or to skip a track.
+  continueLabel?: string;
+}
+
+export type PacerPhase = (PacedPhase | FreeformPhase | SelfPacedHoldPhase | MediaPhase) & PhaseRound;
+
+// ===== SESSION EVENTS =====
+// Everything that happened in a session, on the SAME clock as the RR series: t is
+// wall-clock ms (Date.now), the clock the strap data is stamped with. Keeping one
+// clock is a convention the writer holds; nothing enforces it.
+export type SessionEvent =
+  | { t: number; type: 'session-start' }
+  | { t: number; type: 'session-end'; endedBy: 'completed' | 'abandoned' }
+  | { t: number; type: 'phase-start'; index: number; mode: PacerPhase['mode']; label?: string }
+  | { t: number; type: 'phase-end'; index: number; endedBy: 'auto' | 'person' }
+  | { t: number; type: 'hold-release'; index: number }
+  // Sampled from the player element itself, never inferred from a start time.
+  | { t: number; type: 'media-position'; index: number; positionMs: number }
+  | { t: number; type: 'media-play' | 'media-pause' | 'media-seek' | 'media-ended'; index: number; positionMs: number }
+  | { t: number; type: 'strap-connect' | 'strap-drop' };
+
+// One beat of the RR series, with the moment it happened. t is reconstructed per
+// beat by walking back through each packet's intervals from the packet's arrival,
+// so beats inside a multi-interval packet are not all stamped with one time.
+export interface RRSample {
+  t: number;
+  rr: number;
+}
 
 export interface PacerProgram {
   phases: PacerPhase[];
@@ -227,4 +282,14 @@ export interface PracticeSessionRecord {
   // Every self-paced hold completed in the session, in order. Empty for exercises
   // without one.
   holds: PracticeHoldRecord[];
+  // The full RR series with per-beat timestamps, never truncated. Empty when no
+  // strap was connected. Hosts should store this in object storage with a pointer
+  // on the session row, not inline.
+  rrSeries: RRSample[];
+  // Everything that happened, on the same clock as rrSeries.
+  events: SessionEvent[];
+  // How many times this person has done this exercise before, including this
+  // one, when the host knows. The first listen is not the same stimulus as the
+  // eighth. null when the host did not say.
+  listenNumber: number | null;
 }

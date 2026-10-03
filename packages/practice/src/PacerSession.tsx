@@ -6,6 +6,10 @@
 //                     when the person ends it
 //   self-paced-hold — the instruction and a release button. No timer, no target:
 //                     the safety cap behind it is never shown.
+//   media           — an uploaded audio or video track, an image, or a block of
+//                     text, while the strap records. Position, play, pause, seek
+//                     and end are reported through onEvent, sampled from the
+//                     player element itself.
 // Calls onComplete once the last phase ends.
 //
 // Tone cues (unless audioEnabled is false):
@@ -18,12 +22,12 @@
 //   self-paced-hold — a very soft, low tone at the start and every PRESENCE_MS
 //                     after: company, not a count. Nothing rises or speeds up.
 
-import { useEffect, useRef, type CSSProperties } from 'react';
+import { useCallback, useEffect, useRef, type CSSProperties } from 'react';
 
 import BreathPacer from './BreathPacer';
 import { CUE, playTone } from './audio';
 import { breathSegments, cycleMs, manualEnd, pacedCue, pacedStateAt, routeOnlyText } from './pacer';
-import type { BreathPart, PacerPhase, PacerProgram } from './types';
+import type { BreathPart, MediaPhase, PacerPhase, PacerProgram, SessionEvent } from './types';
 import { usePacerProgram, type PhaseEnd, type PhaseStart } from './usePacerProgram';
 
 // Spacing of the presence tone during a self-paced hold. Long and even on purpose:
@@ -125,7 +129,95 @@ export function cueFor(
     }
     case 'self-paced-hold':
       return { key: `h${index}:${Math.floor(elapsedMs / PRESENCE_MS)}`, tone: CUE.presence };
+    case 'media':
+      // One soft tone as the step begins. Nothing during a track: the track is
+      // the stimulus, and a tone over it would be an event of its own.
+      return { key: `m${index}`, tone: CUE.soft };
   }
+}
+
+// How often a playing track reports its position. One second resolves every
+// passage boundary a facilitator could mark, without flooding the event log.
+const POSITION_TICK_MS = 1000;
+
+function MediaView({
+  phase,
+  index,
+  onEvent,
+  onEnded,
+}: {
+  phase: MediaPhase;
+  index: number;
+  onEvent?: (e: SessionEvent) => void;
+  onEnded: () => void;
+}) {
+  const { asset } = phase;
+  const lastTickRef = useRef(0);
+  const posMs = (el: HTMLMediaElement) => Math.round(el.currentTime * 1000);
+  const report = useCallback(
+    (type: 'media-play' | 'media-pause' | 'media-seek' | 'media-ended', el: HTMLMediaElement) =>
+      onEvent?.({ t: Date.now(), type, index, positionMs: posMs(el) }),
+    [onEvent, index]
+  );
+  const onTimeUpdate = useCallback(
+    (e: React.SyntheticEvent<HTMLMediaElement>) => {
+      const now = Date.now();
+      if (now - lastTickRef.current < POSITION_TICK_MS) return;
+      lastTickRef.current = now;
+      onEvent?.({ t: now, type: 'media-position', index, positionMs: posMs(e.currentTarget) });
+    },
+    [onEvent, index]
+  );
+  // The session was started by a tap, so playback is allowed to begin on its own.
+  const mediaRef = useRef<HTMLMediaElement | null>(null);
+  useEffect(() => {
+    const el = mediaRef.current;
+    if (!el) return;
+    el.play().catch(() => {
+      /* the person can press play; the pause/play events still log */
+    });
+  }, [asset.src]);
+
+  const mediaProps = {
+    ref: mediaRef as never,
+    src: asset.src,
+    controls: true,
+    preload: 'auto' as const,
+    style: { width: '100%', maxWidth: 560, display: 'block', margin: '0 auto' },
+    onTimeUpdate,
+    onPlay: (e: React.SyntheticEvent<HTMLMediaElement>) => report('media-play', e.currentTarget),
+    onPause: (e: React.SyntheticEvent<HTMLMediaElement>) => {
+      // A pause fires at the natural end too; ended handles that one.
+      if (!e.currentTarget.ended) report('media-pause', e.currentTarget);
+    },
+    onSeeked: (e: React.SyntheticEvent<HTMLMediaElement>) => report('media-seek', e.currentTarget),
+    onEnded: (e: React.SyntheticEvent<HTMLMediaElement>) => {
+      report('media-ended', e.currentTarget);
+      onEnded();
+    },
+  };
+
+  return (
+    <div style={{ textAlign: 'center', padding: '12px 8px' }}>
+      {phase.instruction ? (
+        <p style={{ margin: '0 0 16px', fontSize: 16, lineHeight: 1.55, color: C.indigo }}>{phase.instruction}</p>
+      ) : null}
+      {asset.kind === 'audio' ? <audio {...mediaProps} /> : null}
+      {asset.kind === 'video' ? <video {...mediaProps} playsInline /> : null}
+      {asset.kind === 'image' ? (
+        <img
+          src={asset.src}
+          alt={asset.title ?? ''}
+          style={{ maxWidth: '100%', maxHeight: 420, borderRadius: 8, display: 'block', margin: '0 auto' }}
+        />
+      ) : null}
+      {asset.kind === 'text' ? (
+        <p style={{ margin: '0 auto', maxWidth: '52ch', fontSize: 18, lineHeight: 1.6, color: C.indigo, textAlign: 'left' }}>
+          {asset.text}
+        </p>
+      ) : null}
+    </div>
+  );
 }
 
 export default function PacerSession({
@@ -133,12 +225,15 @@ export default function PacerSession({
   onComplete,
   onPhaseStart,
   onPhaseEnd,
+  onEvent,
   audioEnabled = true,
 }: {
   program: PacerProgram;
   onComplete: () => void;
   onPhaseStart?: (start: PhaseStart) => void;
   onPhaseEnd?: (end: PhaseEnd) => void;
+  // Media events (position ticks, play, pause, seek, end), on the session clock.
+  onEvent?: (e: SessionEvent) => void;
   audioEnabled?: boolean;
 }) {
   const playback = usePacerProgram(program, onComplete, { onPhaseStart, onPhaseEnd });
@@ -230,6 +325,10 @@ export default function PacerSession({
             time to beat.
           </p>
         </div>
+      ) : null}
+
+      {phase.mode === 'media' ? (
+        <MediaView phase={phase} index={phaseIndex} onEvent={onEvent} onEnded={endPhase} />
       ) : null}
 
       {manual ? (
