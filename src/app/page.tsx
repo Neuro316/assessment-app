@@ -197,13 +197,15 @@ function pickResonance(segments: RFSegment[]): { rate: number; scores: number[] 
 
   const maxSdnn = maxOf((m) => m.sdnn);
   const maxRmssd = maxOf((m) => m.rmssd);
-  const maxCoh = maxOf((m) => m.coherence);
+  // Coherence is null on a segment too short to compute it. Such a segment
+  // gets no coherence credit rather than the old sentinel's arbitrary 50.
+  const maxCoh = maxOf((m) => m.coherence ?? 0);
 
   const scores = segments.map((s) =>
     s.metrics
       ? 0.4 * (s.metrics.sdnn / maxSdnn) +
         0.3 * (s.metrics.rmssd / maxRmssd) +
-        0.3 * (s.metrics.coherence / maxCoh)
+        0.3 * ((s.metrics.coherence ?? 0) / maxCoh)
       : 0
   );
 
@@ -1410,7 +1412,8 @@ export default function AssessmentPage() {
         rate: s.rate,
         sdnn: s.metrics ? Math.round(s.metrics.sdnn) : 0,
         rmssd: s.metrics ? Math.round(s.metrics.rmssd) : 0,
-        coherence: s.metrics ? s.metrics.coherence : 0,
+        // null leaves a gap in the chart rather than drawing a fake zero.
+        coherence: s.metrics ? s.metrics.coherence : null,
         score: Math.round((resonance.scores[i] ?? 0) * 100),
       })),
     [rfSegments, resonance]
@@ -2097,7 +2100,7 @@ export default function AssessmentPage() {
                 tipId="coherence"
                 openTip={openTip}
                 onToggleTip={toggleTip}
-                value={restingMetrics ? restingMetrics.coherence.toFixed(0) : '—'}
+                value={restingMetrics?.coherence != null ? restingMetrics.coherence.toFixed(0) : '—'}
                 unit="%"
                 note="How closely your heart rhythm and your breath moved together at rest."
               />
@@ -2106,7 +2109,7 @@ export default function AssessmentPage() {
                 tipId="complexity"
                 openTip={openTip}
                 onToggleTip={toggleTip}
-                value={restingMetrics ? restingMetrics.sampEn.toFixed(2) : '—'}
+                value={restingMetrics?.sampEn != null ? restingMetrics.sampEn.toFixed(2) : '—'}
                 note="The adaptive range in your signal — room to respond to whatever comes next."
               />
               <MetricCard

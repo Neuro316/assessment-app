@@ -27,12 +27,13 @@ export function emptySessionMetrics(): PracticeSessionMetrics {
 
 // Organisation of the rhythm around one dominant pattern, 0-100. Autocorrelation
 // proxy over lags of 3-30 beats, verbatim from the assessment.
-export function coherenceRatio(rr: number[]): number {
+export function coherenceRatio(rr: number[]): number | null {
   const n = rr.length;
-  if (n < 20) return 50;
+  // null, never a sentinel, when the record is too short to say anything.
+  if (n < 20) return null;
   const mean = rr.reduce((a, b) => a + b, 0) / n;
   const totalVar = rr.map((r) => (r - mean) ** 2).reduce((a, b) => a + b, 0) / n;
-  if (totalVar === 0) return 0;
+  if (totalVar === 0) return null;
 
   let maxCorr = 0;
   for (let lag = 3; lag < Math.min(n / 2, 30); lag++) {

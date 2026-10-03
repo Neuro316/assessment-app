@@ -21,23 +21,28 @@ export interface HRVMetrics {
   hfNu: number;
   // Respiratory
   breathRate: number;
-  // Nonlinear
-  sampEn: number;
-  dfaA1: number;
-  // Composite
-  coherence: number;
-  stressIdx: number;
+  // Nonlinear. null when the record is too short or too flat to compute: these
+  // used to return fixed sentinels (1.5, 1.0) on thin data, which in any
+  // correlation or transition analysis produce dense fake point masses
+  // wherever two metrics fail together. A metric that cannot be computed
+  // refuses rather than guesses.
+  sampEn: number | null;
+  dfaA1: number | null;
+  // Composite. Same rule: null, never a sentinel (was 50 and 0).
+  coherence: number | null;
+  stressIdx: number | null;
   // Meta
   rrCount: number;
 }
 
-export function sampleEntropy(data: number[], m = 2, rFactor = 0.2): number {
+export function sampleEntropy(data: number[], m = 2, rFactor = 0.2): number | null {
   const n = data.length;
-  if (n < 20) return 1.5;
+  if (n < 20) return null;
   const mean = data.reduce((a, b) => a + b, 0) / n;
   const sd = Math.sqrt(data.map(x => (x - mean) ** 2).reduce((a, b) => a + b, 0) / n);
   const r = rFactor * sd;
-  if (r === 0) return 0;
+  // A flat series has no tolerance band and no defined entropy.
+  if (r === 0) return null;
 
   let A = 0, B = 0;
   for (let i = 0; i < n - m; i++) {
@@ -52,13 +57,14 @@ export function sampleEntropy(data: number[], m = 2, rFactor = 0.2): number {
       }
     }
   }
-  if (B === 0 || A === 0) return 2.0;
+  // No template matches at all: -log(A/B) is undefined, not "high".
+  if (B === 0 || A === 0) return null;
   return Math.round(-Math.log(A / B) * 100) / 100;
 }
 
-export function dfaAlpha1(data: number[]): number {
+export function dfaAlpha1(data: number[]): number | null {
   const n = data.length;
-  if (n < 20) return 1.0;
+  if (n < 20) return null;
   const mean = data.reduce((a, b) => a + b, 0) / n;
 
   // Integrate
@@ -89,7 +95,7 @@ export function dfaAlpha1(data: number[]): number {
     logF.push(Math.log(Math.sqrt(totalFluc / nb)));
   }
 
-  if (logN.length < 2) return 1.0;
+  if (logN.length < 2) return null;
   const nn = logN.length;
   let sx = 0, sy = 0, sxy = 0, sx2 = 0;
   for (let i = 0; i < nn; i++) {
@@ -98,12 +104,13 @@ export function dfaAlpha1(data: number[]): number {
   return Math.round((nn * sxy - sx * sy) / (nn * sx2 - sx * sx) * 100) / 100;
 }
 
-export function coherenceRatio(rr: number[]): number {
+export function coherenceRatio(rr: number[]): number | null {
   const n = rr.length;
-  if (n < 20) return 50;
+  if (n < 20) return null;
   const mean = rr.reduce((a, b) => a + b, 0) / n;
   const totalVar = rr.map(r => (r - mean) ** 2).reduce((a, b) => a + b, 0) / n;
-  if (totalVar === 0) return 0;
+  // No variability means no rhythm to be coherent with.
+  if (totalVar === 0) return null;
 
   let maxCorr = 0;
   for (let lag = 3; lag < Math.min(n / 2, 30); lag++) {
@@ -115,8 +122,8 @@ export function coherenceRatio(rr: number[]): number {
   return Math.round(Math.max(0, Math.min(100, (maxCorr / totalVar) * 100)) * 10) / 10;
 }
 
-export function stressIndex(rr: number[]): number {
-  if (rr.length < 10) return 0;
+export function stressIndex(rr: number[]): number | null {
+  if (rr.length < 10) return null;
   const binWidth = 50;
   const bins: Record<number, number> = {};
   let minRR = Infinity, maxRR = -Infinity;
@@ -136,7 +143,8 @@ export function stressIndex(rr: number[]): number {
   const Mo = modeBin / 1000;
   const AMo = (modeCount / rr.length) * 100;
   const MxDMn = (maxRR - minRR) / 1000;
-  if (Mo === 0 || MxDMn === 0) return 0;
+  // Degenerate histogram: the Baevsky index is undefined, not zero stress.
+  if (Mo === 0 || MxDMn === 0) return null;
   return Math.round(AMo / (2 * Mo * MxDMn));
 }
 
