@@ -6,6 +6,8 @@
 //                    disconnect, after a cancelled picker, or after the strap dropped)
 //   'reconnecting' — silently reattaching to a strap this origin already knows
 //   'searching'    — the native picker is up
+//   'connecting'   — a device was chosen in the picker and the link is coming up;
+//                    can take several seconds
 //   'connected'    — data is flowing
 //   'error'        — the last connect attempt failed; see `error`
 //
@@ -17,8 +19,10 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import {
   connectHW9,
+  errorDetail,
   isBLESupported,
   reconnectHW9,
+  strapLog,
   type HRConnection,
   type HRDataPoint,
 } from './bluetooth';
@@ -28,6 +32,7 @@ export type PracticeStrapState =
   | 'idle'
   | 'reconnecting'
   | 'searching'
+  | 'connecting'
   | 'connected'
   | 'error';
 
@@ -57,6 +62,13 @@ export function usePracticeStrap(options: UsePracticeStrapOptions = {}): Practic
   // Held so a later connect can go straight back to the same strap, no picker.
   const deviceRef = useRef<BluetoothDevice | null>(null);
   const unsupportedRef = useRef(false);
+  // Set once a silent connect has failed — the in-session device or one
+  // getDevices() remembered. A failing GATT connect can outlast the ~5s activation
+  // window requestDevice() needs, so the next tap skips straight to the picker
+  // rather than repeating the slow attempt and getting the picker refused again.
+  // Cleared on a successful connect. Same rule as the assessment's
+  // skipSilentConnectRef.
+  const skipSilentRef = useRef(false);
 
   // Read through a ref so a caller passing fresh callbacks each render does not
   // tear the connection down.
@@ -78,6 +90,7 @@ export function usePracticeStrap(options: UsePracticeStrapOptions = {}): Practic
   }, []);
 
   const handleDrop = useCallback(() => {
+    strapLog('strap dropped unexpectedly');
     connectionRef.current = null;
     setBattery(null);
     setState('idle');
@@ -88,32 +101,50 @@ export function usePracticeStrap(options: UsePracticeStrapOptions = {}): Practic
     if (unsupportedRef.current || connectionRef.current) return;
     setError(null);
 
+    const skipSilent = skipSilentRef.current;
+    strapLog('connect: tapped', { hasSessionDevice: !!deviceRef.current, skipSilent });
+
     try {
       let conn: HRConnection | null = null;
-      if (deviceRef.current) {
+      if (deviceRef.current && !skipSilent) {
         setState('reconnecting');
+        strapLog('session reconnect: attempting', { device: deviceRef.current.name ?? '(unnamed)' });
         try {
           conn = await reconnectHW9(deviceRef.current, handleData, handleDrop, {
             onBattery: setBattery,
           });
-        } catch {
-          // Out of range too long or no longer paired; ask properly below.
+          strapLog('session reconnect: succeeded');
+        } catch (e) {
+          // Out of range too long or no longer paired; ask properly below. That
+          // attempt may have used up the tap's activation window, so the next tap
+          // must not repeat it.
+          strapLog('session reconnect: failed', errorDetail(e));
+          skipSilentRef.current = true;
         }
       }
       if (!conn) {
         conn = await connectHW9(handleData, handleDrop, {
           onBattery: setBattery,
-          onStage: setState,
-          // Already tried the remembered device above.
-          skipKnownDevices: !!deviceRef.current,
+          onStage: (stage) => {
+            setState(stage);
+            // Reaching the picker means the silent route has already failed, or
+            // there was none. Either way the next tap goes straight to the picker.
+            if (stage === 'searching') skipSilentRef.current = true;
+          },
+          // Skip the silent route when it already failed on an earlier tap, or when
+          // the session device above was just tried.
+          skipKnownDevices: skipSilent || !!deviceRef.current,
         });
       }
 
       connectionRef.current = conn;
       deviceRef.current = conn.device;
+      skipSilentRef.current = false;
       setBattery(conn.battery);
       setState('connected');
+      strapLog('connect: connected');
     } catch (e) {
+      strapLog('connect: gave up', { ...errorDetail(e), skipSilentNext: skipSilentRef.current });
       const err = e as { name?: string; message?: string } | undefined;
       // Dismissing the picker is a choice, not a failure.
       if (err?.name === 'NotFoundError') {

@@ -99,6 +99,9 @@ export default function PracticeTestPage() {
           console.log('[stub] would route to assessment');
           setNeedsBaseline(true);
         }}
+        // The round brand mark on its own. neuroprogeny-logo.png includes the
+        // wordmark, which would spin along with it.
+        connectingLogoSrc="/apple-touch-icon.png"
       />
     </div>
   );

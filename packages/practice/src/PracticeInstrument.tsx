@@ -49,6 +49,10 @@ export interface PracticeInstrumentProps {
   canUseExercise: (exercise: PracticeExercise) => PracticeAccessArm | null;
   onRecordSession: (record: PracticeSessionRecord) => void;
   onNeedsBaseline: () => void;
+  // The host's brand mark, shown spinning while the armband connects. A square image
+  // of a round mark works best. The package ships no brand assets of its own, so
+  // without this a plain spinner is shown instead.
+  connectingLogoSrc?: string;
 }
 
 interface RunningSession {
@@ -73,11 +77,75 @@ const STRAP_LABEL: Record<PracticeStrapState, string> = {
   idle: 'Armband not connected',
   reconnecting: 'Reconnecting to your armband…',
   searching: 'Choose your armband in the dialog…',
+  connecting: 'Connecting to your armband… this can take several seconds.',
   connected: 'Armband connected',
   error: 'Could not connect',
 };
 
+// The states where the link is coming up and the person can only wait. Without
+// something moving on screen, a connect that takes several seconds reads as stuck.
+const WORKING_STATES: PracticeStrapState[] = ['reconnecting', 'connecting'];
+
 // ===== SMALL PIECES =====
+
+// Keyframes cannot be declared in an inline style, and the package carries no
+// stylesheet, so the spin is declared here and rendered with the logo. The names are
+// prefixed so they cannot collide with anything in the host's CSS.
+const LOGO_SPIN_CSS = `
+@keyframes np-practice-logo-spin { to { transform: rotate(360deg); } }
+.np-practice-logo-spin { animation: np-practice-logo-spin 1.3s linear infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .np-practice-logo-spin { animation-duration: 4s; }
+}
+`;
+
+// The host's brand mark, spinning. Expects a square image of a round mark; it is
+// clipped to a circle and multiplied, so a white background drops out against the
+// pale status bar.
+function LogoSpinner({ src }: { src: string }) {
+  return (
+    <>
+      <style>{LOGO_SPIN_CSS}</style>
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src={src}
+        alt=""
+        aria-hidden
+        width={36}
+        height={36}
+        className="np-practice-logo-spin"
+        style={{
+          width: 36,
+          height: 36,
+          borderRadius: '50%',
+          objectFit: 'cover',
+          mixBlendMode: 'multiply',
+          flexShrink: 0,
+        }}
+      />
+    </>
+  );
+}
+
+// Fallback when the host passes no logo. Animated with SVG's own animateTransform,
+// so it needs no CSS at all.
+function Spinner() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden style={{ flexShrink: 0 }}>
+      <circle cx="8" cy="8" r="6.5" fill="none" stroke={C.mist} strokeWidth="2" />
+      <path d="M8 1.5a6.5 6.5 0 0 1 6.5 6.5" fill="none" stroke={C.blue} strokeWidth="2" strokeLinecap="round">
+        <animateTransform
+          attributeName="transform"
+          type="rotate"
+          from="0 8 8"
+          to="360 8 8"
+          dur="0.9s"
+          repeatCount="indefinite"
+        />
+      </path>
+    </svg>
+  );
+}
 
 function Button({
   children,
@@ -120,12 +188,14 @@ function StrapBar({
   battery,
   error,
   onConnect,
+  logoSrc,
 }: {
   state: PracticeStrapState;
   hr: number | null;
   battery: number | null;
   error: string | null;
   onConnect: () => void;
+  logoSrc?: string;
 }) {
   const canConnect = state === 'idle' || state === 'error';
   return (
@@ -143,10 +213,19 @@ function StrapBar({
         color: C.charcoal,
       }}
     >
-      <span>
-        {state === 'connected' && hr ? `${STRAP_LABEL.connected} — ${hr} bpm` : STRAP_LABEL[state]}
-        {state === 'connected' && battery !== null ? ` · battery ${battery}%` : ''}
-        {state === 'error' && error ? ` — ${error}` : ''}
+      <span
+        style={{ display: 'flex', alignItems: 'center', gap: 10 }}
+        role="status"
+        aria-live="polite"
+      >
+        {WORKING_STATES.includes(state) ? (
+          logoSrc ? <LogoSpinner src={logoSrc} /> : <Spinner />
+        ) : null}
+        <span>
+          {state === 'connected' && hr ? `${STRAP_LABEL.connected} — ${hr} bpm` : STRAP_LABEL[state]}
+          {state === 'connected' && battery !== null ? ` · battery ${battery}%` : ''}
+          {state === 'error' && error ? ` — ${error}` : ''}
+        </span>
       </span>
       {canConnect ? (
         <Button variant="secondary" onClick={onConnect}>
@@ -176,6 +255,7 @@ export default function PracticeInstrument({
   canUseExercise,
   onRecordSession,
   onNeedsBaseline,
+  connectingLogoSrc,
 }: PracticeInstrumentProps) {
   const [running, setRunning] = useState<RunningSession | null>(null);
   const [finished, setFinished] = useState<Finished | null>(null);
@@ -272,6 +352,7 @@ export default function PracticeInstrument({
       battery={strap.battery}
       error={strap.error}
       onConnect={() => void strap.connect()}
+      logoSrc={connectingLogoSrc}
     />
   );
 

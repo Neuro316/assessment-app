@@ -24,7 +24,9 @@ export type BatteryCallback = (level: number) => void;
 // Which route a connect attempt is taking, so the UI can say what is happening.
 //   'reconnecting' — silently reattaching to a strap we already have permission for
 //   'searching'    — falling back to the native picker
-export type ConnectStage = 'reconnecting' | 'searching';
+//   'connecting'   — a device was chosen in the picker; GATT connect through
+//                    notifications starting, which can take several seconds
+export type ConnectStage = 'reconnecting' | 'searching' | 'connecting';
 export type StageCallback = (stage: ConnectStage) => void;
 
 export interface ConnectOptions {
@@ -49,6 +51,24 @@ export interface HRConnection {
 const HR_SERVICE = 'heart_rate';
 const BATTERY_SERVICE = 'battery_service';
 
+// The longest a connect may take, from gatt.connect() through the battery read,
+// before it is treated as failed. Web Bluetooth gives these calls no timeout of
+// their own and they can hang indefinitely; a normal connect has been seen to take
+// about 7s on the HW9, so this leaves headroom without leaving a person stuck.
+const ATTACH_TIMEOUT_MS = 12_000;
+
+// ⚠ TEMPORARY DEBUG LOGGING. Traces every connect stage, with the error name where
+// one is thrown, so a real-device test shows which step fails. Remove once the
+// reconnect-after-refresh issue is understood.
+export function strapLog(stage: string, detail?: Record<string, unknown>): void {
+  console.log(`[practice-strap] ${stage}`, detail ?? '');
+}
+
+export function errorDetail(e: unknown): { name: string; message: string } {
+  const err = e as { name?: string; message?: string } | undefined;
+  return { name: err?.name ?? 'unknown', message: err?.message ?? String(e) };
+}
+
 // getDevices() is newer than the rest of Web Bluetooth and absent from Safari and
 // older Chrome, so it is treated as optional rather than assumed.
 type BluetoothWithGetDevices = Bluetooth & { getDevices?: () => Promise<BluetoothDevice[]> };
@@ -59,13 +79,26 @@ type BluetoothWithGetDevices = Bluetooth & { getDevices?: () => Promise<Bluetoot
 // an error.
 export async function findPairedHW9(): Promise<BluetoothDevice | null> {
   try {
-    if (typeof navigator === 'undefined' || !navigator.bluetooth) return null;
+    if (typeof navigator === 'undefined' || !navigator.bluetooth) {
+      strapLog('getDevices: no navigator.bluetooth');
+      return null;
+    }
     const bluetooth = navigator.bluetooth as BluetoothWithGetDevices;
-    if (typeof bluetooth.getDevices !== 'function') return null;
+    if (typeof bluetooth.getDevices !== 'function') {
+      strapLog('getDevices: not available in this browser');
+      return null;
+    }
 
     const devices = await bluetooth.getDevices();
-    return devices.find((d) => (d.name || '').toUpperCase().includes('HW9')) ?? null;
-  } catch {
+    const match = devices.find((d) => (d.name || '').toUpperCase().includes('HW9')) ?? null;
+    strapLog('getDevices: result', {
+      count: devices.length,
+      names: devices.map((d) => d.name ?? '(unnamed)'),
+      matched: match?.name ?? null,
+    });
+    return match;
+  } catch (e) {
+    strapLog('getDevices: threw', errorDetail(e));
     return null;
   }
 }
@@ -82,23 +115,42 @@ export async function connectHW9(
 ): Promise<HRConnection> {
   const { onBattery, onStage, skipKnownDevices } = options;
 
-  if (!skipKnownDevices) {
+  if (skipKnownDevices) {
+    strapLog('silent connect: skipped, going straight to picker');
+  } else {
     const known = await findPairedHW9();
     if (known) {
       onStage?.('reconnecting');
+      strapLog('silent connect: attempting', { device: known.name ?? '(unnamed)' });
       try {
-        return await attachToDevice(known, onData, onDisconnect, onBattery);
-      } catch {
+        const conn = await attachToDevice(known, onData, onDisconnect, onBattery);
+        strapLog('silent connect: succeeded');
+        return conn;
+      } catch (e) {
         // Off, flat or out of range. Fall through and ask for it properly.
+        strapLog('silent connect: failed, falling through to picker', errorDetail(e));
       }
     }
   }
 
   onStage?.('searching');
-  const device = await navigator.bluetooth.requestDevice({
-    filters: [{ services: [HR_SERVICE] }, { name: 'HW9' }],
-    optionalServices: [HR_SERVICE, BATTERY_SERVICE],
-  });
+  strapLog('picker: requesting');
+  let device: BluetoothDevice;
+  try {
+    device = await navigator.bluetooth.requestDevice({
+      filters: [{ services: [HR_SERVICE] }, { name: 'HW9' }],
+      optionalServices: [HR_SERVICE, BATTERY_SERVICE],
+    });
+  } catch (e) {
+    // NotFoundError = dismissed; SecurityError/NotAllowedError = refused, usually
+    // because the tap's activation window had already run out.
+    strapLog('picker: refused or dismissed', errorDetail(e));
+    throw e;
+  }
+  strapLog('picker: device chosen', { device: device.name ?? '(unnamed)' });
+  // The picker has closed but the link is not up yet; tell the UI, so it does not
+  // keep asking the person to choose a device they already chose.
+  onStage?.('connecting');
 
   return attachToDevice(device, onData, onDisconnect, onBattery);
 }
@@ -168,21 +220,91 @@ async function attachToDevice(
   }
   device.addEventListener('gattserverdisconnected', onDrop);
 
-  let server: BluetoothRemoteGATTServer;
-  try {
-    server = await gatt.connect();
+  // Which step was running when something threw or timed out, for the debug log.
+  let step = 'gatt.connect';
+  const started = Date.now();
+  // Set when the deadline passes. The bring-up below keeps running in the
+  // background (a hung GATT call cannot be cancelled from here), so every step
+  // checks this and stops rather than attaching to a connection already given up on.
+  let abandoned = false;
+  const stopIfAbandoned = () => {
+    if (abandoned) throw new Error(`attach abandoned after timeout (at ${step})`);
+  };
+
+  const bringUp = async (): Promise<number | null> => {
+    strapLog('attach: gatt.connect', { device: device.name ?? '(unnamed)', wasConnected: gatt.connected });
+    const server = await gatt.connect();
+    stopIfAbandoned();
+    step = 'getPrimaryService';
     const service = await server.getPrimaryService(HR_SERVICE);
+    stopIfAbandoned();
+    step = 'getCharacteristic';
     const characteristic = await service.getCharacteristic('heart_rate_measurement');
+    stopIfAbandoned();
 
+    step = 'startNotifications';
     await characteristic.startNotifications();
+    stopIfAbandoned();
     subscriptions.push(subscribe(characteristic, (value) => onData(parseHeartRateData(value))));
-  } catch (e) {
-    // Never leave a listener behind on a connection that failed to come up.
-    release();
-    throw e;
-  }
+    strapLog('attach: heart rate notifications started', { ms: Date.now() - started });
 
-  const battery = await readBattery(server, subscriptions, onBattery);
+    // Inside the deadline too: a battery read that never answers would hang the
+    // connect just the same.
+    step = 'readBattery';
+    const level = await readBattery(server, subscriptions, onBattery);
+    stopIfAbandoned();
+    return level;
+  };
+
+  // Tear down whatever came up, link included. release() runs first and removes
+  // onDrop, so this disconnect does not report a drop. `force` disconnects even when
+  // not yet connected: disconnect() also aborts a gatt.connect() still in flight, so
+  // a timed-out strap is not left mid-handshake.
+  const abort = (reason: string, force = false) => {
+    release();
+    if (gatt.connected || force) {
+      strapLog(`attach: disconnecting (${reason})`);
+      gatt.disconnect();
+    }
+  };
+
+  const pending = bringUp();
+  // If the deadline wins, whatever the bring-up does later is cleaned up here and
+  // never surfaces as an unhandled rejection.
+  pending.then(
+    () => {
+      if (abandoned) abort('late completion after timeout');
+    },
+    () => {
+      if (abandoned) abort('late failure after timeout');
+    }
+  );
+
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      abandoned = true;
+      const err = new Error(
+        'The armband took too long to connect. Make sure it is on and nearby, then tap Connect to try again.'
+      );
+      err.name = 'TimeoutError';
+      reject(err);
+    }, ATTACH_TIMEOUT_MS);
+  });
+
+  let battery: number | null;
+  try {
+    battery = await Promise.race([pending, deadline]);
+  } catch (e) {
+    strapLog('attach: failed', { step, ms: Date.now() - started, ...errorDetail(e) });
+    // Never leave a listener or a half-open link behind: gatt.connect() can succeed
+    // and a later step still fail or hang, and the next attempt must not start from
+    // that stale connection.
+    abort(abandoned ? 'timed out' : 'failed', abandoned);
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
 
   // Keep the screen awake for the session. Held so disconnect can release it
   // rather than waiting for the browser to drop it when the tab is hidden.
