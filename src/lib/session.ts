@@ -6,7 +6,8 @@
 //   Layer 1 (live)  — localStorage. Synchronous, always available, per-device.
 //   Layer 2 (TODO)  — Supabase nr_assessment_sessions. Cross-device resume.
 //
-// Nothing here writes final results; that stays with nr_assessment_results.
+// Nothing here writes final results. Those are posted to the University on
+// finalize, whose /api/assessments/submit route writes them to nr_quiz_results.
 
 import type { HRVMetrics } from './hrv-metrics';
 
@@ -111,8 +112,8 @@ export function clearLocalSession(): void {
 //     primary key (participant_id, assessment_number)
 //   )
 //
-// This is draft/in-progress state only. Final results still go to
-// nr_assessment_results on finalize, and the draft row is deleted at that point.
+// This is draft/in-progress state only. Final results still go to the University
+// on finalize (written to nr_quiz_results), and the draft row is deleted at that point.
 //
 // Why it is worth having: a participant who starts on a laptop that dies can
 // resume on their phone. localStorage alone cannot cross devices.
