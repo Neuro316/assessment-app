@@ -26,8 +26,8 @@ export { PRACTICE_LIBRARY, PRACTICE_EXERCISES, PRACTICE_PURPOSES } from './libra
 // Narration: the spoken segments for each guided visualization, the manifest of
 // clips a host generates and stores, and the function that turns a script plus
 // the host's clip URLs into a session.
-export { NARRATION, guidedProgram, narrationManifest, spokenSec } from './narration';
-export type { NarrationResolver, NarrationScript, NarrationSegment } from './narration';
+export { NARRATION, NARRATOR_VOICES, guidedProgram, narrationManifest, spokenSec } from './narration';
+export type { NarrationResolver, NarrationScript, NarrationSegment, NarratorRole } from './narration';
 export type {
   BreathPart,
   EvidenceTier,

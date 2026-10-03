@@ -31,8 +31,25 @@ export interface NarrationSegment {
   pauseAfterSec: number;
 }
 
+/**
+ * Which narrator reads a script. Three voices, chosen by what the script asks
+ * of the listener rather than by exercise family:
+ *  - interoceptive: body scans and felt-sense work (slow, low, unhurried)
+ *  - curious: observing, reviewing, widening (warm, lightly engaged)
+ *  - active: rehearsal, priming and precise attention (clear, articulate)
+ */
+export type NarratorRole = 'interoceptive' | 'curious' | 'active';
+
+/** ElevenLabs voice ids per role, approved 2026-10-03. Hosts key clip storage on the role, not the id. */
+export const NARRATOR_VOICES: Record<NarratorRole, { voiceId: string; name: string }> = {
+  interoceptive: { voiceId: 'aZmUfPlx1GDZ4UDKlP7Q', name: 'Calm Meditative Steve' },
+  curious: { voiceId: 'Jx35Jvky2ob4xi16g1ha', name: 'Miss La' },
+  active: { voiceId: 'lqydY2xVUkg9cEIFmFMU', name: 'Angela' },
+};
+
 export interface NarrationScript {
   exerciseId: string;
+  narrator: NarratorRole;
   segments: NarrationSegment[];
 }
 
@@ -41,6 +58,7 @@ const seg = (id: string, text: string, pauseAfterSec: number): NarrationSegment 
 export const NARRATION: Record<string, NarrationScript> = {
   V1: {
     exerciseId: 'V1',
+    narrator: 'interoceptive',
     segments: [
       seg('V1-1', 'Let your eyes close. For the next few minutes there is nothing to do except notice. Start at the soles of your feet. Feel where they meet the ground. The pressure. The temperature. The texture of whatever is under them.', 15),
       seg('V1-2', 'Let your attention rise into your ankles and your lower legs. You are not trying to change anything. You are taking an inventory of contact. Where the body touches the chair, the floor, your own clothes.', 15),
@@ -52,6 +70,7 @@ export const NARRATION: Record<string, NarrationScript> = {
   },
   V2: {
     exerciseId: 'V2',
+    narrator: 'active',
     segments: [
       seg('V2-1', 'Bring to mind one moment coming up that you want to meet well. A conversation, a decision, a task, a situation you can already picture. One moment, with a beginning and an end.', 10),
       seg('V2-2', 'Now see it from inside your own eyes. Not watching yourself from across the room. Looking out, the way you will when it happens. What is in front of you? Who is there? What are your hands doing?', 15),
@@ -63,6 +82,7 @@ export const NARRATION: Record<string, NarrationScript> = {
   },
   V3: {
     exerciseId: 'V3',
+    narrator: 'curious',
     segments: [
       seg('V3-1', 'This one is for learning, not for rehearsing. Bring to mind something you did recently that you want to understand better. It can be something that went well, or something that did not.', 10),
       seg('V3-2', 'Now step back from it. Watch yourself from about ten feet away, as if on video. No commentary. No judgment. Just observe what you did and how you did it.', 20),
@@ -73,6 +93,7 @@ export const NARRATION: Record<string, NarrationScript> = {
   },
   V4: {
     exerciseId: 'V4',
+    narrator: 'active',
     segments: [
       seg('V4-1', 'Choose one thing you are about to begin. Something with a clear start and a clear finish. Most people stop picturing at the start. This practice is about seeing the whole of it.', 10),
       seg('V4-2', 'See the first move. Then the middle, where the effort is. Then the point where it turns toward finishing. Then the finish itself. Then the moment after, when it has come to rest. In that order, at real speed.', 25),
@@ -83,6 +104,7 @@ export const NARRATION: Record<string, NarrationScript> = {
   },
   V5: {
     exerciseId: 'V5',
+    narrator: 'active',
     segments: [
       seg('V5-1', 'Open your eyes if they are closed, and choose one small, specific point in front of you. A mark on the wall. A thread. The edge of something. Smaller than you think it should be.', 10),
       seg('V5-2', 'Rest your gaze on it and hold it steady. Two or three seconds of stillness. The eyes stop searching, and the rest of the system takes the hint.', 15),
@@ -93,6 +115,7 @@ export const NARRATION: Record<string, NarrationScript> = {
   },
   V6: {
     exerciseId: 'V6',
+    narrator: 'interoceptive',
     segments: [
       seg('V6-1', 'This one asks something of you. Bring to mind a moment when things did not go the way you wanted. A real one, from your own life. Let it be specific.', 10),
       seg('V6-2', 'Now let yourself feel the drop. In the chest, in the stomach, wherever it lands for you. Do not edit it. The drop is real, and it is allowed.', 20),
@@ -104,6 +127,7 @@ export const NARRATION: Record<string, NarrationScript> = {
   },
   V7: {
     exerciseId: 'V7',
+    narrator: 'curious',
     segments: [
       seg('V7-1', 'Bring to mind a moment coming up where you will be seen, by people whose opinion matters to you. Now populate it. Put the specific people there. Name them to yourself.', 15),
       seg('V7-2', 'See where each of them is. Notice what happens in your body when they are present. That reaction is information, not a problem.', 20),
@@ -114,6 +138,7 @@ export const NARRATION: Record<string, NarrationScript> = {
   },
   V8: {
     exerciseId: 'V8',
+    narrator: 'active',
     segments: [
       seg('V8-1', 'Bring back one real moment from your own life that went exactly as you intended. Not a highlight someone else chose. One of yours. Any part of life counts.', 10),
       seg('V8-2', 'Rebuild it with as much detail as you can recover. The light. The sounds. What you could feel in your body as it was working. Let it play through once.', 25),
@@ -124,6 +149,7 @@ export const NARRATION: Record<string, NarrationScript> = {
   },
   V9: {
     exerciseId: 'V9',
+    narrator: 'interoceptive',
     segments: [
       seg('V9-1', 'This one is not about the effort. It is about the minute after. Picture yourself just after something that took something out of you. The thing is done.', 10),
       seg('V9-2', 'See the shoulders drop. Not forced. Just the weight coming off them. See the eyes lift and take in something further away.', 20),
@@ -134,6 +160,7 @@ export const NARRATION: Record<string, NarrationScript> = {
   },
   V10: {
     exerciseId: 'V10',
+    narrator: 'interoceptive',
     segments: [
       seg('V10-1', 'Build a place. Real or imagined, it does not matter. One place where your system settles the moment you arrive. Choose it now, and stay with it.', 15),
       seg('V10-2', 'Add the detail. What is under your feet. What the air is like. What you can hear. The further away the horizon, the better.', 25),
@@ -144,6 +171,7 @@ export const NARRATION: Record<string, NarrationScript> = {
   },
   V11: {
     exerciseId: 'V11',
+    narrator: 'curious',
     segments: [
       seg('V11-1', 'Open your eyes. Let your attention go wide. Take in the whole room. The edges of your vision. The ceiling. The sounds from outside. Everything at once, nothing in particular.', 20),
       seg('V11-2', 'Now narrow. One point, close, specific. Hold it. Everything else drops away.', 15),
@@ -154,6 +182,7 @@ export const NARRATION: Record<string, NarrationScript> = {
   },
   V12: {
     exerciseId: 'V12',
+    narrator: 'active',
     segments: [
       seg('V12-1', 'See yourself finishing something that mattered to you. Not the result. The finish. The way you carry yourself in the last minute of it.', 15),
       seg('V12-2', 'Now make it specific. Decide how you want to be known for finishing, whatever the outcome. See that version of you walk away from it.', 25),
@@ -198,6 +227,8 @@ export function guidedProgram(script: NarrationScript, resolve: NarrationResolve
 
 // Every clip the host needs to generate and store, with the text to send to the
 // narrator. One entry per segment across all scripts.
-export function narrationManifest(): { id: string; exerciseId: string; text: string }[] {
-  return Object.values(NARRATION).flatMap((s) => s.segments.map((g) => ({ id: g.id, exerciseId: s.exerciseId, text: g.text })));
+export function narrationManifest(): { id: string; exerciseId: string; narrator: NarratorRole; voiceId: string; text: string }[] {
+  return Object.values(NARRATION).flatMap((s) =>
+    s.segments.map((g) => ({ id: g.id, exerciseId: s.exerciseId, narrator: s.narrator, voiceId: NARRATOR_VOICES[s.narrator].voiceId, text: g.text })),
+  );
 }
