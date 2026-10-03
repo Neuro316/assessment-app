@@ -423,64 +423,10 @@ export const PRACTICE_EXERCISES: PracticeExercise[] = [
     },
   },
 
-  // ===== Freeform / walking =====
-  {
-    id: 'B8',
-    title: 'Nasal-Only Sustained Breathing',
-    category: 'steady',
-    minTier: 'practice',
-    sessionContext: 'walking',
-    description:
-      'Nasal breathing raises CO2 tolerance over time and produces nitric oxide, improving how efficiently oxygen is delivered — so over time the same effort costs less. Ten to twenty minutes is a good length; finish whenever you choose.',
-    program: {
-      phases: [
-        {
-          mode: 'freeform',
-          instruction:
-            'Breathe through your nose only as you walk. If you need more air, slow down or ease off rather than opening your mouth.',
-          route: 'nose',
-          // Open-ended: the person finishes when they choose.
-          continueLabel: 'Finish',
-        },
-      ],
-    },
-  },
-
-  // ===== Self-paced hold / walking, highest caution =====
-  {
-    id: 'B9',
-    title: 'Breath-Hold Walking Practice',
-    category: 'activating',
-    minTier: 'mastery',
-    requiresBalancedBaseline: true,
-    sessionContext: 'walking',
-    description:
-      'A safe, voluntary air-hunger signal is a training ground for staying regulated while uncomfortable. Exhale, hold while you keep walking, and breathe again at the first clear urge.',
-    safetyNote:
-      'Never practise near or in water. Never push to distress or lightheadedness. This is not a duration challenge — release the hold the moment you feel a clear but manageable urge to breathe. Releasing early is always fine.',
-    program: {
-      // PROVISIONAL: the brief says 4-6 rounds; four, the safer end.
-      phases: rounds(4, [
-        {
-          mode: 'self-paced-hold',
-          holdOn: 'exhale',
-          label: 'Hold',
-          instruction:
-            'Breathe out fully, then hold with empty lungs as you keep walking. Breathe again as soon as you feel a clear urge to.',
-          // PROVISIONAL backstop, never shown. The brief gives no figure for B9;
-          // 45s is conservative pending review.
-          safetyCapSec: 45,
-        },
-        {
-          mode: 'freeform',
-          label: 'Recover',
-          instruction:
-            'Breathe easily through your nose as you keep walking. Take at least 30 seconds — longer is fine — and go on only when your breathing has settled.',
-          route: 'nose',
-          minDurationSec: 30,
-          continueLabel: 'Next round',
-        },
-      ]),
-    },
-  },
+  // B8 (Nasal-Only Sustained Breathing) and B9 (Breath-Hold Walking Practice)
+  // deliberately removed per Cameron's later ruling pulling walking-based
+  // exercises out of the app for now. They were here in the real backup
+  // branch (backup/practice-pacer-2026-10-03, commit c8bf32f) as part of the
+  // real 16-exercise library; removing them is a product decision, not a
+  // correction of that branch's content.
 ];
