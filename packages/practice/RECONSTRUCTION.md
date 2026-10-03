@@ -61,23 +61,63 @@ project (no deployment exists between the commit 12h before this session and
 the first commit this session pushed — confirms it was never deployed
 either, by git-triggered build or direct CLI push).
 
+## UPDATE 2026-10-03: the real source PDF surfaced
+
+Cameron re-attached `Breathing_library.pdf` ("The Breathing Library") —
+this is the authoritative source for B1-B12, not the fragments above. It
+resolved most of the open questions from the first pass of this document and
+raised one real conflict. Full text is extracted and available in this
+session's scratch space if it needs re-checking; the key facts:
+
+- **B1, B5 matched exactly** what the lost-session fragments already gave —
+  strong independent confirmation those two survived accurately.
+- **B4, B6, B10, B11** now have real specs. B6 is a single cued breath, not
+  a loop. B10 and B11 are multi-stage (B10: a fast-breathing phase then a
+  return to resonance pace; B11: three fixed one-minute stages at
+  increasing exhale ratios), not flat single-rate patterns.
+- **B8 (Nasal Only Walking) and B9 (The Carbon Dioxide Tolerance Walk)** are
+  both walking-based. Per Cameron (2026-10-03): remove walking exercises
+  from the app for now. Neither is implemented. Note: B9 is the exercise
+  named in the lost session's hold-recording test — that specific test
+  can't be re-run until walking exercises are back in scope, but the
+  hold-recording mechanism itself is still exercised by B5's hold phases
+  and by the new activating exercises (see below).
+- **B7 conflict, unresolved**: the PDF's real B7 ("Breath to Tempo
+  Coupling") is tied to golf-swing timing with no fixed duration at all —
+  it cannot be the lost session's recovered 8s fixed-duration pattern. That
+  recovered pattern is kept in `extended-breath-patterns.ts` as a comment
+  only, explicitly not wired up as B7, pending Cameron clarifying what it
+  actually was.
+- **B2, B3, B12 confirmed as a sigh family**, exactly as grouped in the
+  first pass — B3 is the physiological sigh repeated for 5 minutes, B12 is
+  the sigh repeated exactly 3 times, B2 is "1 to 3 cycles." The lost
+  session's 9s/2s/3s sigh timing isn't contradicted by the PDF (which gives
+  no exact seconds) and is kept, still flagged as assumed precision.
+- **B13-B16 are confirmed NOT in this PDF** — it's the original 12-technique
+  library only. The activating set (previously guessed at under those
+  codes) was a separate, later, unreviewed addition with no surviving spec
+  anywhere checked, Cameron included ("I hadn't seen it yet... it's in this
+  chat somewhere or it doesn't exist" — it doesn't exist). Checked for a
+  live Claude Code session on this project to query for residual context —
+  none was running. So the activating set is designed fresh in
+  `activating-patterns.ts`, coded A1/A2 rather than continuing the B13-B16
+  numbering, from real technique research (Wim Hof Method's own guide,
+  a Tummo breathing structure guide) rather than guessed at.
+- **Session-length selection**: per Cameron (2026-10-03), exercises that
+  aren't extremely activating should offer a duration picker (3/5/10/20
+  min) rather than one fixed length. Modeled as `selectableDurationsMin` on
+  `PracticeBreathExercise`. Extremely activating exercises (A1, A2) keep
+  their own fixed round structure instead, via `extremelyActivating: true`.
+
 ## Confirmed domain context (from Cameron's project notes, not this session)
 
-- The original breathing library is B1-B12, documented in a PDF
-  (`Breathing_library.pdf`) with mechanism/research/golf-application per
-  technique — not currently attached to this rebuild. The matching
-  visualization (V1-V12) and mindfulness (M1-M12) libraries exist in the same
-  document set but have never been located.
-- B13+ are later additions: Cameron asked (2026-10-02) for the library to be
-  expanded with genuinely activating/state-shifting techniques, naming Tummo
-  breath and Wim Hof-style breathing by name, with the evoked state framed as
-  hypothesized where evidence is thin.
+- The matching visualization (V1-V12) and mindfulness (M1-M12) libraries are
+  in the same PDF as the breathing library (confirmed 2026-10-03) — not yet
+  pulled into the package; this rebuild has only touched the breathing side.
 - Activating/high-intensity techniques should be gated on a person's recent
-  biometrics showing a balanced baseline, not on membership tier alone.
-- No exercise should be excluded from the app for not fitting the pacer's
-  original (rate-paced) design — this explicitly includes walking-based and
-  self-paced breath-hold techniques, which is almost certainly what B9's
-  "hold" is.
+  biometrics showing a balanced baseline, not on membership tier alone
+  (`activating-patterns.ts` marks eligibility via `extremelyActivating`; the
+  actual gating is a host/UI decision, not yet built).
 - Package name: `@neuroprogeny/practice`, built with `tsup`, consumed by this
   app's own `/practice` page and (eventually) by `npu-platform-v2` as an
   imported React component — not an iframe. As of this rebuild, npu-hub-v2
@@ -88,41 +128,47 @@ either, by git-triggered build or direct CLI push).
 
 | Piece | File | Status | Confidence |
 |---|---|---|---|
-| Cue-timing rule | `pacer-engine.ts` | Done, committed | High — matches all 6 table rows exactly, verified by script |
-| B1, B2/B3/B12, B5, B7 patterns | `extended-breath-patterns.ts` | Done, committed | High for totals/cue points; phase-internal split for the sigh pattern is the simplest reading of 3 cue points, not independently confirmed |
-| B10, B13, B14, B16 Fast/Medium patterns | `extended-breath-patterns.ts` | Done, committed | Low — only total duration confirmed; internal inhale/exhale split is ASSUMED even, almost certainly wrong for B14 "Pulses" |
+| Cue-timing rule | `pacer-engine.ts` | Done, committed | High — matches all 6 recovered table rows exactly, verified by script |
+| B1-B6, B10-B12 patterns | `extended-breath-patterns.ts` | Done, committed | High — direct from the real PDF; sigh-family internal timing still assumed-precision |
+| B7 | `extended-breath-patterns.ts` | Deliberately NOT wired up | Conflict between PDF and recovered data, unresolved — see above |
+| B8, B9 (walking) | — | Deliberately NOT included | Out of scope per Cameron 2026-10-03 |
+| A1 (Wim Hof-style), A2 (Tummo-style) | `activating-patterns.ts` | Done, committed | New design from real technique research, not recovery — see sources in the file |
 | Wake lock | `use-wake-lock.ts` | Done, committed | New code, not recovered — standard Screen Wake Lock API usage |
-| Phase runner (drives a pattern over time, fires cues) | `use-breath-pattern.ts` | Done, committed | New code, not recovered |
-| Hold recording (`endedBy: 'abandoned'`) | `hold-recording.ts` | Done, committed | Matches the one concrete detail that survived (`[stub]` console record, `endedBy: 'abandoned'`); everything else in the record shape is invented to fit |
+| Phase runner (drives a pattern over time, fires cues) | `use-breath-pattern.ts` | Done, committed | New code, not recovered; does not yet understand multi-stage exercises or openEndedHold |
+| Hold recording (`endedBy: 'abandoned'`) | `hold-recording.ts` | Done, committed | Matches the one concrete detail that survived; doesn't yet distinguish openEndedHold (always 'completed') from a fixed hold ended early |
 
 ## What's NOT rebuilt — real gaps, not yet started
 
-- **B4, B6, B8, B9, B11, B15, and any B16 "Slow" variant** — zero surviving
-  data. B4 existing in the original 12-technique library but having no
-  recovered pacer timing is a special case worth flagging to Cameron
-  directly, since it suggests the gap in the summary isn't "doesn't exist,"
-  just "wasn't mentioned in that one change's report."
+- **B15, and any B16 variant** — still zero surviving data, and not in the
+  PDF either (B16 was never B-library at all, same situation as the rest of
+  the activating set) — fold any further activating ideas into the A-series
+  instead of resurrecting B13-B16 codes.
 - **The actual `PacerSession.tsx`-equivalent UI component** that renders a
-  running exercise (visual phase indicator, tone playback wiring, start/stop)
-  using the pieces above. Right now `PracticeInstrument.tsx` still only
-  knows the old simple-rate `BreathPacer`, not phase patterns.
-- **Wiring `EXTENDED_BREATH_PATTERNS` into the exercise list** so an exercise
-  with a phase pattern actually runs through the new engine instead of (or
-  alongside) a flat `pacerRate`.
+  running exercise (visual phase indicator, tone playback wiring, start/stop,
+  duration picker, multi-stage progression) using the pieces above. Right
+  now `PracticeInstrument.tsx` still only knows the old simple-rate
+  `BreathPacer`, not phase patterns or multi-stage exercises.
+- **`useBreathPattern` doesn't yet run multi-stage exercises** (B10, B11,
+  A1, A2) — it currently drives one `BreathPattern` in a loop. Needs
+  extending to walk a `PracticeBreathExercise`'s `stages[]` in sequence,
+  respecting `durationMs` / `repeatCycles` / `openEndedHold` per stage.
+- **Wiring the libraries into the exercise list** so `BREATHING_LIBRARY` and
+  `ACTIVATING_PATTERNS` entries actually appear and run, instead of (or
+  alongside) the old flat `pacerRate` placeholder exercises.
 - **Tone/audio playback itself** — nothing here plays a sound yet; `cueFor`
   only says *when* a cue should fire.
 - **The `npu-hub-v2` integration** — importing `@neuroprogeny/practice` as a
   component there. Not started in this rebuild or in the original lost work.
+- **V1-V12 (visualization) and M1-M12 (mindfulness) libraries** — confirmed
+  to exist in the same source PDF, not yet pulled into the package at all.
 
 ## Open questions for Cameron
 
-1. Does `Breathing_library.pdf` still exist somewhere you can re-attach? It
-   would upgrade B1-B12 from partially-assumed to confirmed, and might
-   independently cover B4.
-2. What are B6, B8, B9, B11, B15 actually called and structured? (B9 is
-   specifically referenced as having a "hold" — confirming its real pattern
-   would also validate the hold-recording wiring end to end.)
-3. Is a B16 "Slow" variant real, or was Fast/Medium the whole set?
-4. Confirm or correct the ASSUMED even inhale/exhale splits for B10, B13,
-   B14, B16 Fast/Medium — B14 "Pulses" in particular is very likely not a
-   plain two-phase breath.
+1. What was the real B7, if the recovered 8s fixed pattern isn't "Breath to
+   Tempo Coupling"? Was it a training-mode stand-in, or something else
+   entirely?
+2. A1/A2's exact timing (breath pace, round/retention lengths) came from
+   general practice guides, not a fixed canonical source — want a specific
+   pace, or is the commonly-taught baseline fine to ship with?
+3. When should B8/B9 (walking) come back into scope, and should they reuse
+   the same self-paced/openEndedHold mechanism as A1's retention?

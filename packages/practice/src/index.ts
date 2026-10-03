@@ -26,7 +26,10 @@ export type {
 export { breathDurationMs, cueFor, MIN_FULLY_CUED_BREATH_MS } from './pacer-engine';
 export type { BreathPhase, BreathPhaseKind, BreathPattern } from './pacer-engine';
 
-export { EXTENDED_BREATH_PATTERNS } from './extended-breath-patterns';
+export { BREATHING_LIBRARY } from './extended-breath-patterns';
+export type { ExerciseStage, PracticeBreathExercise } from './extended-breath-patterns';
+
+export { ACTIVATING_PATTERNS } from './activating-patterns';
 
 export { useBreathPattern, isHoldPhase } from './use-breath-pattern';
 export type { BreathPatternState, UseBreathPatternOptions } from './use-breath-pattern';
