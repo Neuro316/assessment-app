@@ -22,7 +22,7 @@
 //   self-paced-hold — a very soft, low tone at the start and every PRESENCE_MS
 //                     after: company, not a count. Nothing rises or speeds up.
 
-import { useCallback, useEffect, useRef, type CSSProperties } from 'react';
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
 
 import BreathPacer from './BreathPacer';
 import { CUE, playEndChime, playTone } from './audio';
@@ -181,15 +181,29 @@ function MediaView({
     });
   }, [asset.src]);
 
+  // Playing state for the one control a listener gets: pause and resume. No
+  // scrubber, no volume strip; a narrated session should not look like a player.
+  const [playing, setPlaying] = useState(false);
+  const toggle = () => {
+    const el = mediaRef.current;
+    if (!el) return;
+    if (el.paused) el.play().catch(() => {});
+    else el.pause();
+  };
+
   const mediaProps = {
     ref: mediaRef as never,
     src: asset.src,
-    controls: true,
+    controls: false,
     preload: 'auto' as const,
     style: { width: '100%', maxWidth: 560, display: 'block', margin: '0 auto' },
     onTimeUpdate,
-    onPlay: (e: React.SyntheticEvent<HTMLMediaElement>) => report('media-play', e.currentTarget),
+    onPlay: (e: React.SyntheticEvent<HTMLMediaElement>) => {
+      setPlaying(true);
+      report('media-play', e.currentTarget);
+    },
     onPause: (e: React.SyntheticEvent<HTMLMediaElement>) => {
+      setPlaying(false);
       // A pause fires at the natural end too; ended handles that one.
       if (!e.currentTarget.ended) report('media-pause', e.currentTarget);
     },
@@ -205,8 +219,28 @@ function MediaView({
       {phase.instruction ? (
         <p style={{ margin: '0 0 16px', fontSize: 16, lineHeight: 1.55, color: C.indigo }}>{phase.instruction}</p>
       ) : null}
-      {asset.kind === 'audio' ? <audio {...mediaProps} /> : null}
+      {asset.kind === 'audio' ? <audio {...mediaProps} style={{ display: 'none' }} /> : null}
       {asset.kind === 'video' ? <video {...mediaProps} playsInline /> : null}
+      {asset.kind === 'audio' || asset.kind === 'video' ? (
+        <button
+          type="button"
+          onClick={toggle}
+          aria-label={playing ? 'Pause' : 'Resume'}
+          style={{
+            marginTop: 4,
+            padding: '8px 18px',
+            borderRadius: 999,
+            border: `1px solid ${C.mist}`,
+            background: '#fff',
+            color: C.indigo,
+            font: 'inherit',
+            fontSize: 13,
+            cursor: 'pointer',
+          }}
+        >
+          {playing ? 'Pause' : 'Resume'}
+        </button>
+      ) : null}
       {asset.kind === 'image' ? (
         <img
           src={asset.src}
@@ -312,17 +346,19 @@ export default function PacerSession({
               {routeOnlyText(phase.route)}
             </div>
           ) : null}
-          <div
-            style={{
-              marginTop: 24,
-              fontSize: 40,
-              fontWeight: 300,
-              color: C.indigo,
-              fontVariantNumeric: 'tabular-nums',
-            }}
-          >
-            {formatElapsed(elapsedMs)}
-          </div>
+          {phase.hideTimer ? null : (
+            <div
+              style={{
+                marginTop: 24,
+                fontSize: 40,
+                fontWeight: 300,
+                color: C.indigo,
+                fontVariantNumeric: 'tabular-nums',
+              }}
+            >
+              {formatElapsed(elapsedMs)}
+            </div>
+          )}
         </div>
       ) : null}
 

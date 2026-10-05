@@ -113,6 +113,9 @@ export interface FreeformPhase {
   // clip, where a tone would land on the listener's settling. Default sounds
   // the soft tone at the start.
   cue?: 'default' | 'none';
+  // true hides this phase's own clock. A narrated session shows only the
+  // session total; a countdown on every quiet pulls attention to the number.
+  hideTimer?: boolean;
 }
 
 // A hold the person ends themselves with a release button. Never a countdown,

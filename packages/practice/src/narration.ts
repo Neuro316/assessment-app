@@ -255,7 +255,14 @@ export function guidedProgram(
       phases.push({ mode: 'freeform', label: `Part ${i + 1}`, instruction: s.text, durationSec: spokenSec(s.text), cue: 'none' });
     }
     if (s.pauseAfterSec > 0) {
-      phases.push({ mode: 'freeform', label: 'Quiet', instruction: ' ', durationSec: Math.round(s.pauseAfterSec * scale), cue: 'none' });
+      phases.push({
+        mode: 'freeform',
+        label: 'Quiet',
+        instruction: ' ',
+        durationSec: Math.round(s.pauseAfterSec * scale),
+        cue: 'none',
+        hideTimer: true,
+      });
     }
   });
   return { phases };
