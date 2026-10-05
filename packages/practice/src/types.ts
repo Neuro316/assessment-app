@@ -90,6 +90,9 @@ export interface PacedPhase {
   exhaleRoute: BreathRoute;
   // Shown for the whole phase, e.g. 'Slow' / 'Medium' / 'Fast'.
   label?: string;
+  // true hides the breath count or time-left line under the pacer. Narrated
+  // sessions show only the session total.
+  hideTimer?: boolean;
   // Replaces the default on-screen word for a part of the breath, e.g. exhale:
   // 'Open-mouth exhale', or inhale: 'Inhale… now begin on the exhale'.
   cues?: Partial<Record<BreathPart, string>>;

@@ -831,12 +831,30 @@ export default function PracticeInstrument({
           </div>
         </div>
 
-        <div style={{ display: 'flex', gap: 12, justifyContent: 'center' }}>
-          <Button variant="secondary" onClick={() => setChosen(null)}>
-            Back
-          </Button>
-          <Button onClick={() => start(chosen)}>Begin</Button>
-        </div>
+        {(() => {
+          // With the armband chosen, Begin waits for it: a session that starts
+          // before the strap is streaming would record nothing and say so only
+          // at the end. The person can switch to "Just the pacer" at any time.
+          const waitingForStrap =
+            exercise.kind !== 'field' && chosen.mode === 'armband' && strap.state !== 'connected';
+          return (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'center' }}>
+              <div style={{ display: 'flex', gap: 12, justifyContent: 'center' }}>
+                <Button variant="secondary" onClick={() => setChosen(null)}>
+                  Back
+                </Button>
+                <Button onClick={() => start(chosen)} disabled={waitingForStrap}>
+                  Begin
+                </Button>
+              </div>
+              {waitingForStrap ? (
+                <p style={{ margin: 0, fontSize: 12, color: C.text3, textAlign: 'center' }}>
+                  Begin unlocks once the armband is streaming. Not wearing it today? Choose Just the pacer above.
+                </p>
+              ) : null}
+            </div>
+          );
+        })()}
       </div>
     );
   }

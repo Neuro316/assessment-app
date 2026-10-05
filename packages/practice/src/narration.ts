@@ -210,7 +210,9 @@ export function programFor(exercise: PracticeExercise, resolve: NarrationResolve
   const script = exercise.kind === 'guided' ? NARRATION[exercise.id] : undefined;
   if (!script || !resolve) return exercise.program;
   if (!script.segments.some((s) => resolve(s.id))) return exercise.program;
-  return withBookends(guidedProgram(script, resolve));
+  const p = withBookends(guidedProgram(script, resolve));
+  // The one clock in a narrated session is the session total.
+  return { ...p, phases: p.phases.map((ph) => (ph.mode === 'paced' || ph.mode === 'freeform' ? { ...ph, hideTimer: true } : ph)) };
 }
 
 // The voice the person heard, for the session record; null when no clip played.

@@ -312,19 +312,21 @@ export default function PacerSession({
             return (
               <>
                 <BreathPacer amplitude={state.amplitude} word={cue.word} route={cue.route} />
-                <div
-                  style={{
-                    textAlign: 'center',
-                    fontSize: 14,
-                    color: C.charcoal,
-                    opacity: 0.6,
-                    fontVariantNumeric: 'tabular-nums',
-                  }}
-                >
-                  {phase.repCount !== undefined
-                    ? `Breath ${state.breath} of ${state.breaths}`
-                    : `${formatTime(state.remainingMs)} left`}
-                </div>
+                {phase.hideTimer ? null : (
+                  <div
+                    style={{
+                      textAlign: 'center',
+                      fontSize: 14,
+                      color: C.charcoal,
+                      opacity: 0.6,
+                      fontVariantNumeric: 'tabular-nums',
+                    }}
+                  >
+                    {phase.repCount !== undefined
+                      ? `Breath ${state.breath} of ${state.breaths}`
+                      : `${formatTime(state.remainingMs)} left`}
+                  </div>
+                )}
               </>
             );
           })()
