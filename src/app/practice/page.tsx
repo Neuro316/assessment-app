@@ -147,7 +147,10 @@ export default function PracticeTestPage() {
         }
         onRecordSession={(record: PracticeSessionRecord) => {
           // Stub: nothing is persisted, there is no backend behind this yet.
+          // Logged twice: the live object for a person in DevTools, and JSON
+          // text for a reader that only sees console strings.
           console.log('[stub] practice session record', record);
+          console.log('[stub] practice session record json ' + JSON.stringify(record));
         }}
         onNeedsBaseline={() => {
           console.log('[stub] would route to assessment');
