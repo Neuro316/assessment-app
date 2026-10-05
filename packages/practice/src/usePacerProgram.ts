@@ -25,7 +25,7 @@ export interface PacerPlayback {
   transitioning: boolean;
   done: boolean;
   // Ends the current phase now: the person's Release / Finish / Next button.
-  endPhase: () => void;
+  endPhase: (by?: PhaseEndedBy) => void;
 }
 
 // How a phase came to an end. 'auto' on a self-paced hold is its safety cap.
@@ -71,9 +71,13 @@ export function usePacerProgram(
     onPhaseStartRef.current = callbacks.onPhaseStart;
   });
 
-  // Announce each phase as it begins, once.
+  // Announce each phase as it begins, once. The ref guards against React's
+  // development double-mount, which otherwise logged phase 0 twice.
+  const announcedRef = useRef(-1);
   useEffect(() => {
     if (done) return;
+    if (announcedRef.current === phaseIndex) return;
+    announcedRef.current = phaseIndex;
     const started = phases[phaseIndex];
     if (started) onPhaseStartRef.current?.({ phase: started, index: phaseIndex, startedAt: phaseStartedAt });
     // phaseStartedAt changes together with phaseIndex; keying on the index alone
@@ -144,9 +148,14 @@ export function usePacerProgram(
     if (end !== null && elapsedMs >= end) advance(phaseIndex, 'auto');
   }, [phase, phaseIndex, elapsedMs, advance]);
 
-  const endPhase = useCallback(() => {
-    if (!done) advance(phaseIndex, 'person');
-  }, [advance, done, phaseIndex]);
+  // The person's button ends a phase as 'person'; a clip reaching its own end
+  // is 'auto', the same as a timed phase running out.
+  const endPhase = useCallback(
+    (by: PhaseEndedBy = 'person') => {
+      if (!done) advance(phaseIndex, by);
+    },
+    [advance, done, phaseIndex]
+  );
 
   return {
     phase,

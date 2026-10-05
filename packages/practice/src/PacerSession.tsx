@@ -375,14 +375,14 @@ export default function PacerSession({
       ) : null}
 
       {phase.mode === 'media' ? (
-        <MediaView phase={phase} index={phaseIndex} onEvent={onEvent} onEnded={endPhase} />
+        <MediaView phase={phase} index={phaseIndex} onEvent={onEvent} onEnded={() => endPhase('auto')} />
       ) : null}
 
       {manual ? (
         <div style={{ display: 'flex', justifyContent: 'center' }}>
           <button
             type="button"
-            onClick={endPhase}
+            onClick={() => endPhase()}
             disabled={!manual.enabled}
             style={{
               ...bigButton,
