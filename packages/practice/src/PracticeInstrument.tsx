@@ -593,6 +593,7 @@ export default function PracticeInstrument({
         disconnects: disconnectsRef.current,
       },
       narratorId: narratorIdFor(running.exercise, resolveNarration),
+      endedBy,
       accessArm: running.accessArm,
       holds: holdsRef.current,
       rrSeries: seriesRef.current,

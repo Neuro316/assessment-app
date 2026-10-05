@@ -291,6 +291,9 @@ export interface PracticeSessionRecord {
   metrics: PracticeSessionMetrics;
   samplesSummary: PracticeSamplesSummary;
   narratorId: string | null;
+  // How the session ended: the program ran to its end, or the person ended it
+  // early. The same value is in the session-end event; here for the row.
+  endedBy: 'completed' | 'abandoned';
   accessArm: PracticeAccessArm;
   // Every self-paced hold completed in the session, in order. Empty for exercises
   // without one.
