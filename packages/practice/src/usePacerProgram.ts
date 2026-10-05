@@ -112,7 +112,12 @@ export function usePacerProgram(
     [phases]
   );
 
-  // The clock. One frame-rate tick drives the pacer animation and every check.
+  // The clock. A frame-rate tick drives the pacer animation while the tab is
+  // visible. Browsers stop requestAnimationFrame entirely in a hidden tab, which
+  // would freeze phase changes and cues the moment the person switches away, so
+  // a coarse interval keeps the session moving underneath (throttled to about
+  // once a second in the background, which is enough to end a phase and sound
+  // its cue near its moment).
   useEffect(() => {
     if (done) return;
     let raf = 0;
@@ -121,7 +126,11 @@ export function usePacerProgram(
       raf = requestAnimationFrame(loop);
     };
     raf = requestAnimationFrame(loop);
-    return () => cancelAnimationFrame(raf);
+    const interval = setInterval(() => setNow(Date.now()), 250);
+    return () => {
+      cancelAnimationFrame(raf);
+      clearInterval(interval);
+    };
   }, [done]);
 
   const phase = done ? null : phases[phaseIndex] ?? null;

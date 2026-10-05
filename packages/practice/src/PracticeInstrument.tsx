@@ -107,7 +107,7 @@ interface Chosen {
   mode: 'armband' | 'pacer';
 }
 
-// The four post-session scales, 1 to 5 from less to more than before.
+// The four scales, asked before and after a session, 1 to 5 low to high.
 const RATING_SCALES: { key: RatingScale; label: string }[] = [
   { key: 'grounded', label: 'Grounded' },
   { key: 'focused', label: 'Focused' },
@@ -452,7 +452,8 @@ export default function PracticeInstrument({
   // Written on the finished screen before the record is handed to the host: a
   // field experiment's note, and every session's rating.
   const [note, setNote] = useState('');
-  const [ratings, setRatings] = useState<SessionRatings>(EMPTY_RATINGS);
+  const [ratingsBefore, setRatingsBefore] = useState<SessionRatings>(EMPTY_RATINGS);
+  const [ratingsAfter, setRatingsAfter] = useState<SessionRatings>(EMPTY_RATINGS);
   const [ratingNote, setRatingNote] = useState('');
   const [running, setRunning] = useState<RunningSession | null>(null);
   const [finished, setFinished] = useState<Finished | null>(null);
@@ -597,7 +598,8 @@ export default function PracticeInstrument({
       rrSeries: seriesRef.current,
       events: eventsRef.current,
       listenNumber: listenNumber ?? null,
-      ratings: null,
+      ratingsBefore: Object.values(ratingsBefore).some((v) => v !== null) ? ratingsBefore : null,
+      ratingsAfter: null,
       ratingNote: null,
     };
 
@@ -607,7 +609,8 @@ export default function PracticeInstrument({
     holdsRef.current = [];
     setRunning(null);
     setNote('');
-    setRatings(EMPTY_RATINGS);
+    setRatingsBefore(EMPTY_RATINGS);
+    setRatingsAfter(EMPTY_RATINGS);
     setRatingNote('');
     // The record waits on the finished screen for the rating (and a field
     // experiment's note), then goes to the host on Done. If the component goes
@@ -813,6 +816,21 @@ export default function PracticeInstrument({
 
         {exercise.kind !== 'field' && chosen.mode === 'armband' ? strapBar : null}
 
+        <div style={{ borderRadius: 16, background: '#fff', border: `1px solid ${C.mist}`, padding: 20 }}>
+          <div style={{ fontSize: 14, color: C.indigo, marginBottom: 4 }}>Before you start, how do you feel right now?</div>
+          <div style={{ fontSize: 11.5, color: C.text3, marginBottom: 14 }}>One tap each, 1 to 5, low to high. You will be asked again after.</div>
+          <div style={{ display: 'grid', gap: 12 }}>
+            {RATING_SCALES.map((sc) => (
+              <ScaleRow
+                key={sc.key}
+                label={sc.label}
+                value={ratingsBefore[sc.key]}
+                onChange={(v) => setRatingsBefore((r) => ({ ...r, [sc.key]: v }))}
+              />
+            ))}
+          </div>
+        </div>
+
         <div style={{ display: 'flex', gap: 12, justifyContent: 'center' }}>
           <Button variant="secondary" onClick={() => setChosen(null)}>
             Back
@@ -871,15 +889,15 @@ export default function PracticeInstrument({
           )}
         </div>
         <div style={{ borderRadius: 16, background: '#fff', border: `1px solid ${C.mist}`, padding: 20 }}>
-          <div style={{ fontSize: 14, color: C.indigo, marginBottom: 4 }}>Compared with before the session, how do you feel?</div>
-          <div style={{ fontSize: 11.5, color: C.text3, marginBottom: 14 }}>One tap each. The middle means about the same.</div>
+          <div style={{ fontSize: 14, color: C.indigo, marginBottom: 4 }}>How do you feel right now?</div>
+          <div style={{ fontSize: 11.5, color: C.text3, marginBottom: 14 }}>One tap each, 1 to 5, low to high. Same scales as before you started.</div>
           <div style={{ display: 'grid', gap: 12 }}>
             {RATING_SCALES.map((sc) => (
               <ScaleRow
                 key={sc.key}
                 label={sc.label}
-                value={ratings[sc.key]}
-                onChange={(v) => setRatings((r) => ({ ...r, [sc.key]: v }))}
+                value={ratingsAfter[sc.key]}
+                onChange={(v) => setRatingsAfter((r) => ({ ...r, [sc.key]: v }))}
               />
             ))}
           </div>
@@ -908,7 +926,7 @@ export default function PracticeInstrument({
               const out: PracticeSessionRecord = {
                 ...record,
                 note: finished.exercise.kind === 'field' ? note.trim() || null : record.note ?? null,
-                ratings: Object.values(ratings).some((v) => v !== null) ? ratings : null,
+                ratingsAfter: Object.values(ratingsAfter).some((v) => v !== null) ? ratingsAfter : null,
                 ratingNote: ratingNote.trim() || null,
               };
               pendingRef.current = null;

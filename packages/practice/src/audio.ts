@@ -69,6 +69,40 @@ export function playTone({ freq, durationSec, gain }: ToneSpec): void {
   }
 }
 
+// The end of a session: two rising notes, clearly not a breath cue, loud enough
+// to land from a pocket or another tab. Scheduled on the audio clock, so it plays
+// whole even if the tab is hidden.
+export function playEndChime(): void {
+  const c = getContext();
+  if (!c || c.state !== 'running') return;
+  try {
+    const notes: { freq: number; at: number; dur: number }[] = [
+      { freq: 528, at: 0, dur: 1.2 },
+      { freq: 792, at: 0.42, dur: 2.2 },
+    ];
+    for (const n of notes) {
+      const t = c.currentTime + n.at;
+      const osc = c.createOscillator();
+      const amp = c.createGain();
+      osc.type = 'sine';
+      osc.frequency.value = n.freq;
+      amp.gain.setValueAtTime(0.0001, t);
+      amp.gain.linearRampToValueAtTime(0.22, t + 0.015);
+      amp.gain.exponentialRampToValueAtTime(0.0001, t + n.dur);
+      osc.connect(amp);
+      amp.connect(c.destination);
+      osc.start(t);
+      osc.stop(t + n.dur + 0.05);
+      osc.onended = () => {
+        osc.disconnect();
+        amp.disconnect();
+      };
+    }
+  } catch {
+    // Audio unavailable; the session ends silently.
+  }
+}
+
 // The cue vocabulary. Inhale rises in pitch, exhale falls, holds sit between — so
 // the cues stay distinct with eyes closed.
 export const CUE = {

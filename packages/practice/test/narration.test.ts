@@ -75,3 +75,40 @@ test('narratorIdFor: the voice of the script that played, null when nothing play
   assert.strictEqual(narratorIdFor(V1, noClips), null);
   assert.strictEqual(narratorIdFor(V1, undefined), null);
 });
+
+// ----- silence inside a guided session, and the room after each clip -----
+import { cueFor } from '../src/PacerSession';
+
+test('guidedProgram: no phase inside a narrated session sounds a tone', () => {
+  const p = guidedProgram(NARRATION.V1, allClips);
+  p.phases.forEach((ph, i) => {
+    const c = cueFor(ph, i, 0);
+    assert.ok(c === null || c.tone === null, `phase ${i} (${ph.mode}) must be silent`);
+  });
+});
+
+test('guidedProgram: a plain freeform phase still sounds its soft tone (control)', () => {
+  const c = cueFor({ mode: 'freeform', instruction: 'x', durationSec: 10 }, 0, 0);
+  assert.ok(c && c.tone !== null);
+});
+
+test('guidedProgram: pauseScale stretches every quiet', () => {
+  const base = guidedProgram(NARRATION.V1, allClips);
+  const slow = guidedProgram(NARRATION.V1, allClips, { pauseScale: 1.5 });
+  const quiets = (p: typeof base) => p.phases.filter((ph) => ph.mode === 'freeform' && ph.label === 'Quiet');
+  assert.strictEqual(quiets(base).length, quiets(slow).length);
+  quiets(base).forEach((q, i) => {
+    const b = q.mode === 'freeform' ? q.durationSec! : 0;
+    const s = quiets(slow)[i];
+    assert.strictEqual(s.mode === 'freeform' ? s.durationSec : 0, Math.round(b * 1.5));
+  });
+});
+
+test('every narration pause leaves at least 10 s to settle, and 20 s mid-script', () => {
+  for (const script of Object.values(NARRATION)) {
+    script.segments.forEach((s, i) => {
+      const last = i === script.segments.length - 1;
+      assert.ok(s.pauseAfterSec >= (last ? 10 : 20), `${s.id} pause ${s.pauseAfterSec}`);
+    });
+  }
+});

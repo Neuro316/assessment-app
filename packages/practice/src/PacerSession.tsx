@@ -25,7 +25,7 @@
 import { useCallback, useEffect, useRef, type CSSProperties } from 'react';
 
 import BreathPacer from './BreathPacer';
-import { CUE, playTone } from './audio';
+import { CUE, playEndChime, playTone } from './audio';
 import { breathSegments, cycleMs, manualEnd, pacedCue, pacedStateAt, routeOnlyText } from './pacer';
 import type { BreathPart, MediaPhase, PacerPhase, PacerProgram, SessionEvent } from './types';
 import { usePacerProgram, type PhaseEnd, type PhaseStart } from './usePacerProgram';
@@ -125,14 +125,17 @@ export function cueFor(
     }
     case 'freeform': {
       const unlocked = (phase.minDurationSec ?? 0) > 0 && manualEnd(phase, elapsedMs)?.enabled === true;
-      return { key: `f${index}:${unlocked ? 'unlocked' : 'start'}`, tone: CUE.soft };
+      const key = `f${index}:${unlocked ? 'unlocked' : 'start'}`;
+      // A silent phase still advances its key, so nothing sounds late if a later
+      // phase is audible.
+      return { key, tone: phase.cue === 'none' ? null : CUE.soft };
     }
     case 'self-paced-hold':
       return { key: `h${index}:${Math.floor(elapsedMs / PRESENCE_MS)}`, tone: CUE.presence };
     case 'media':
       // One soft tone as the step begins. Nothing during a track: the track is
       // the stimulus, and a tone over it would be an event of its own.
-      return { key: `m${index}`, tone: CUE.soft };
+      return { key: `m${index}`, tone: phase.cue === 'none' ? null : CUE.soft };
   }
 }
 
@@ -236,7 +239,13 @@ export default function PacerSession({
   onEvent?: (e: SessionEvent) => void;
   audioEnabled?: boolean;
 }) {
-  const playback = usePacerProgram(program, onComplete, { onPhaseStart, onPhaseEnd });
+  // The chime marks the session's own end, not a phase change, and sounds before
+  // the host is told, so an early tab switch still hears it.
+  const complete = useCallback(() => {
+    if (audioEnabled) playEndChime();
+    onComplete();
+  }, [audioEnabled, onComplete]);
+  const playback = usePacerProgram(program, complete, { onPhaseStart, onPhaseEnd });
   const { phase, phaseIndex, elapsedMs, transitioning, endPhase } = playback;
 
   // Sounds each cue once, as its moment arrives. Keys are tracked even while muted,

@@ -109,6 +109,10 @@ export interface FreeformPhase {
   minDurationSec?: number;
   // Button text when the person ends it, e.g. 'Next round' or 'Finish'.
   continueLabel?: string;
+  // 'none' for a phase that must start silently: the quiet after a narration
+  // clip, where a tone would land on the listener's settling. Default sounds
+  // the soft tone at the start.
+  cue?: 'default' | 'none';
 }
 
 // A hold the person ends themselves with a release button. Never a countdown,
@@ -155,6 +159,9 @@ export interface MediaPhase {
   label?: string;
   // Shown above the media, e.g. "Listen with your eyes closed."
   instruction?: string;
+  // 'none' for a clip that must start silently (a narration segment: a tone
+  // under the first words is a second stimulus). Default sounds the soft tone.
+  cue?: 'default' | 'none';
   durationSec?: number;
   minDurationSec?: number;
   // Button text for an untimed image or text step, or to skip a track.
@@ -295,11 +302,13 @@ export interface PracticeSessionRecord {
   // A field experiment's write-up, entered on the finished screen. null for
   // everything else, and when the person wrote nothing.
   note?: string | null;
-  // How the person feels after the session, on four quick scales asked once on
-  // the finished screen. Each is 1 to 5 from "less" to "more" than before the
-  // session, so 3 is no change. null when skipped. The host collects these
-  // across sessions for the Feedback review; the package only asks.
-  ratings: SessionRatings | null;
+  // How the person feels, on four quick scales, asked once before the session
+  // starts (on the intro screen) and once after (on the finished screen). Each
+  // is 1 to 5, low to high, as of that moment, so after minus before is the
+  // shift. null when skipped. The host collects these across sessions for the
+  // Feedback review; the package only asks.
+  ratingsBefore: SessionRatings | null;
+  ratingsAfter: SessionRatings | null;
   ratingNote: string | null;
 }
 
