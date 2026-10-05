@@ -6,3 +6,6 @@ out/
 *.tsbuildinfo
 next-env.d.ts
 .vercel
+
+# narration clips for the local strap test; the platform serves the real ones
+public/narration/

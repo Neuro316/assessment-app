@@ -14,7 +14,7 @@
 // words) and evidence tier. The library screen groups on purpose.
 //
 // This file lives in the package, not the app, so the platform can import the
-// library for its lesson-block picker and the Fresh Air screen.
+// library for its lesson-block picker and the Practice screen.
 import { rounds } from './pacer';
 import type { PacedPhase, PracticeExercise, PracticePurpose } from './types';
 

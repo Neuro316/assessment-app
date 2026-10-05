@@ -18,6 +18,11 @@
 //                        would when the recent baseline is not balanced
 //   ?media=<url>       — add a custom media exercise playing that audio URL, with
 //                        bookends, to test the media mode and the event log
+//   ?noBio=true        — biometricsEnabled false: no armband offered, pacer only,
+//                        as the host passes for Insight without the bundle
+//   ?narration=<base>  — resolve narration clips at <base>/<role>/<segment>.mp3,
+//                        e.g. ?narration=/narration with the clips copied into
+//                        public/narration (gitignored)
 
 import { useEffect, useState } from 'react';
 
@@ -29,7 +34,11 @@ import {
   type PracticePerson,
   type PracticeSessionRecord,
   PRACTICE_EXERCISES,
+  narrationManifest,
 } from '@neuroprogeny/practice';
+
+// Segment id to role, so a narration base URL resolves to <base>/<role>/<id>.mp3.
+const ROLE_OF = new Map(narrationManifest().map((m) => [m.id, m.narrator]));
 
 // Stand-in for the host's recommendation from the baseline. The package does not
 // decide this.
@@ -78,6 +87,8 @@ export default function PracticeTestPage() {
   const [needsBaseline, setNeedsBaseline] = useState(false);
   const [unbalanced, setUnbalanced] = useState(false);
   const [exercises, setExercises] = useState<PracticeExercise[]>(PRACTICE_EXERCISES);
+  const [bio, setBio] = useState(true);
+  const [narrationBase, setNarrationBase] = useState<string | null>(null);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -86,6 +97,8 @@ export default function PracticeTestPage() {
     setUnbalanced(params.get('unbalanced') === 'true');
     const media = params.get('media');
     if (media) setExercises([...PRACTICE_EXERCISES, customMedia(media)]);
+    setBio(params.get('noBio') !== 'true');
+    setNarrationBase(params.get('narration'));
   }, []);
 
   if (!person) return <div style={{ minHeight: '100vh', background: '#F0F4F8' }} />;
@@ -103,7 +116,9 @@ export default function PracticeTestPage() {
       >
         Practice test page — stub data, nothing is saved. Unlocking via{' '}
         {person.isSuperadmin ? 'superadmin' : 'program'} arm
-        {baseline ? `, baseline ${baseline.resonanceFreq} br/min` : ', no baseline'}.
+        {baseline ? `, baseline ${baseline.resonanceFreq} br/min` : ', no baseline'}
+        {bio ? '' : ', armband off'}
+        {narrationBase ? `, narration from ${narrationBase}` : ', no narration'}.
       </p>
 
       {needsBaseline ? (
@@ -141,6 +156,15 @@ export default function PracticeTestPage() {
         // The round brand mark on its own. neuroprogeny-logo.png includes the
         // wordmark, which would spin along with it.
         connectingLogoSrc="/apple-touch-icon.png"
+        biometricsEnabled={bio}
+        resolveNarration={
+          narrationBase
+            ? (id) => {
+                const role = ROLE_OF.get(id);
+                return role ? `${narrationBase}/${role}/${id}.mp3` : null;
+              }
+            : undefined
+        }
       />
     </div>
   );
