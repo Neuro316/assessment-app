@@ -38,7 +38,15 @@ export interface SessionState {
   // establishes identity itself.
   name: string;
   assessmentNumber: number;
-  connMode: 'ble' | 'sim' | null;
+  connMode: 'ble' | 'sim' | 'none' | null;
+
+  // Which kind of sitting this draft belongs to. Absent on drafts saved before Insight
+  // existed, which were all full assessments. A draft is only ever offered back to the
+  // same kind of sitting.
+  mode?: 'capacity' | 'insight';
+  // Insight only: ratings given so far, by segment, and the segment being rated.
+  sweepRatings?: Partial<Record<string, Partial<Record<string, number | null>>>>;
+  ratingSegment?: string;
 
   // Resting block. elapsed, never remaining — so the value does not depend on
   // knowing what time it was when we saved.
