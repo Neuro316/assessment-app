@@ -107,8 +107,24 @@ export function buildCapacityMessage(input: CapacityMessageInput) {
 
 // A full-assessment sitting: the scored result exactly as before, plus the sweep, plus
 // the age band's fields when there are any (`ageBand`, `context.age_band`).
-export function buildFullMessage(input: CapacityMessageInput, sweep: SweepEnvelope, age: AgeFields = {}) {
-  return { ...buildCapacityMessage(input), sweep, ...age };
+//
+// rawData also gains `self_report_pick`: the pace the person RATED best (insight-sweep.ts
+// selfReportPick: grounded, focused and presence averaged, ties to the slower rate; null
+// with nothing to compare). It sits beside the MEASURED pick (`resonance_freq`) and may
+// differ from it. It is never written into a measured field.
+export function buildFullMessage(
+  input: CapacityMessageInput,
+  sweep: SweepEnvelope,
+  selfReport: { rate: number | null },
+  age: AgeFields = {}
+) {
+  const scored = buildCapacityMessage(input);
+  return {
+    ...scored,
+    rawData: { ...scored.rawData, self_report_pick: { rate: selfReport.rate } },
+    sweep,
+    ...age,
+  };
 }
 
 // The pace-finder pick, with where it came from. A self-reported pick is the rate the

@@ -1634,18 +1634,20 @@ export default function AssessmentPage() {
       attempt: assessmentNumber,
       phase: journeyPhase,
       level,
-    }, sweep, ageFields(launchBand, ageAnswer, true));
+    }, sweep, selfReportPick(sweepRatings), ageFields(launchBand, ageAnswer, true));
     await deliver(message, {
       mode: 'full',
       metricKeys: Object.keys(message.metrics).length,
       recoveryIndex: message.metrics.recoveryIndex,
       sweepItems: sweep.items.length,
+      selfReportPick: message.rawData.self_report_pick.rate,
       ageBand: 'ageBand' in message,
       contextAgeBand: 'context' in message,
     });
   }, [
     launchBand,
     ageAnswer,
+    sweepRatings,
     sittingCompletionId,
     packagedSweep,
     deliver,

@@ -117,12 +117,18 @@ test('full assessment: identical with no resting metrics and a simulated strap t
   assert.deepStrictEqual(buildCapacityMessage(input), legacyCapacityMessage(input.completionId, input));
 });
 
+// The frozen payload with the one rawData addition a Full sitting makes.
+function legacyWithSelfReport(input, rate) {
+  const legacy = legacyCapacityMessage(input.completionId, input);
+  return { ...legacy, rawData: { ...legacy.rawData, self_report_pick: { rate } } };
+}
+
 test('full sitting: ONE message, the unchanged scored result plus the sweep, joined by session_id', () => {
   const input = capacityInput();
   const sweep = buildSweepEnvelope(ratings, input.completionId);
-  const msg = buildFullMessage(input, sweep);
-  // The scored result is exactly the old payload; the only addition is `sweep`.
-  assert.deepStrictEqual(msg, { ...legacyCapacityMessage(input.completionId, input), sweep });
+  const msg = buildFullMessage(input, sweep, selfReportPick(ratings));
+  // The scored result is exactly the old payload plus rawData.self_report_pick; the only other addition is `sweep`.
+  assert.deepStrictEqual(msg, { ...legacyWithSelfReport(input, 5.5), sweep });
   assert.deepEqual(Object.keys(msg), ['type', 'completionId', 'metrics', 'rawData', 'sweep']);
   assert.equal(msg.type, 'assessment-complete');
   assert.equal(msg.sweep.context.session_id, msg.completionId);
@@ -134,14 +140,56 @@ test('full sitting: the scored result alone still carries no sweep (control)', (
   assert.equal('sweep' in buildCapacityMessage(capacityInput()), false);
 });
 
+// ----- the self-report pick on a Full message -----
+
+test('full sitting carries both picks: measured resonance_freq and self_report_pick, which may differ', () => {
+  const input = capacityInput();
+  const measured = input.resonance.rate;
+  // Rated best at a pace the measurement did not pick.
+  const other = [4.5, 5, 5.5, 6, 6.5, 7].find((r) => r !== measured);
+  const seg = `rate_${String(other)}`;
+  const rated = { [seg]: { grounded: 5, focused: 5, energy: 1, presence: 5 } };
+  const msg = buildFullMessage(input, buildSweepEnvelope(rated, input.completionId), selfReportPick(rated));
+  assert.equal(msg.rawData.resonance_freq, measured);
+  assert.equal(msg.metrics.resonanceFreq, measured);
+  assert.deepStrictEqual(msg.rawData.self_report_pick, { rate: other });
+  assert.notEqual(msg.rawData.self_report_pick.rate, msg.rawData.resonance_freq);
+});
+
+test('full sitting: the self-report pick is the three-scale rule, ties to the slower pace (control: same rule as the pace finder)', () => {
+  const tie = {
+    'rate_6': { grounded: 4, focused: 4, energy: 5, presence: 4 },
+    'rate_5': { grounded: 4, focused: 4, energy: 1, presence: 4 },
+  };
+  const msg = buildFullMessage(capacityInput(), buildSweepEnvelope(tie, 'c-tie'), selfReportPick(tie));
+  assert.deepStrictEqual(msg.rawData.self_report_pick, { rate: 5 });
+  assert.equal(selfReportPick(tie).rate, 5);
+});
+
+test('full sitting with no ratings: self_report_pick is { rate: null }, the measured pick unaffected', () => {
+  const input = capacityInput();
+  const msg = buildFullMessage(input, buildSweepEnvelope({}, input.completionId), selfReportPick({}));
+  assert.deepStrictEqual(msg.rawData.self_report_pick, { rate: null });
+  assert.equal(msg.rawData.resonance_freq, input.resonance.rate);
+});
+
+test('pace finder unchanged: no self_report_pick key (control)', () => {
+  const msg = buildPaceFinderMessage({
+    completionId: 'c-pf', sweep: buildSweepEnvelope(ratings, 'c-pf'), pick: selfReportPick(ratings),
+    rfSegments: [], rfRR: [], resonanceScores: [], deviceMode: 'none', rfSegmentMs: 90000, attempt: 1, phase: null,
+  });
+  assert.equal('self_report_pick' in msg.rawData, false);
+  assert.deepEqual(msg.rawData.resonance_pick, { rate: 5.5, source: 'self_report' });
+});
+
 // ----- the age band on the message -----
 
 test('full sitting, band answered: the frozen payload plus sweep, ageBand and context, nothing else', () => {
   const input = capacityInput();
   const sweep = buildSweepEnvelope(ratings, input.completionId);
-  const msg = buildFullMessage(input, sweep, ageFields(null, '40s', true));
+  const msg = buildFullMessage(input, sweep, selfReportPick(ratings), ageFields(null, '40s', true));
   assert.deepStrictEqual(msg, {
-    ...legacyCapacityMessage(input.completionId, input),
+    ...legacyWithSelfReport(input, 5.5),
     sweep,
     ageBand: '40s',
     context: { age_band: '40s' },
@@ -152,17 +200,17 @@ test('full sitting, band answered: the frozen payload plus sweep, ageBand and co
 test('full sitting, band from the launch: context.age_band only, no ageBand (control)', () => {
   const input = capacityInput();
   const sweep = buildSweepEnvelope(ratings, input.completionId);
-  const msg = buildFullMessage(input, sweep, ageFields('50s', null, true));
+  const msg = buildFullMessage(input, sweep, selfReportPick(ratings), ageFields('50s', null, true));
   assert.equal('ageBand' in msg, false);
   assert.deepEqual(msg.context, { age_band: '50s' });
-  assert.deepStrictEqual(msg, { ...legacyCapacityMessage(input.completionId, input), sweep, context: { age_band: '50s' } });
+  assert.deepStrictEqual(msg, { ...legacyWithSelfReport(input, 5.5), sweep, context: { age_band: '50s' } });
 });
 
 test('full sitting, skipped: exactly the frozen payload plus sweep (control)', () => {
   const input = capacityInput();
   const sweep = buildSweepEnvelope(ratings, input.completionId);
-  const msg = buildFullMessage(input, sweep, ageFields(null, 'skip', true));
-  assert.deepStrictEqual(msg, { ...legacyCapacityMessage(input.completionId, input), sweep });
+  const msg = buildFullMessage(input, sweep, selfReportPick(ratings), ageFields(null, 'skip', true));
+  assert.deepStrictEqual(msg, { ...legacyWithSelfReport(input, 5.5), sweep });
 });
 
 test('pace finder: ageBand only when answered, and never a context', () => {
