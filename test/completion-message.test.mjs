@@ -15,6 +15,7 @@ import {
 } from '../src/lib/completion-message.ts';
 import { pickResonance } from '../src/lib/resonance.ts';
 import { buildSweepEnvelope, selfReportPick } from '../src/lib/insight-sweep.ts';
+import { ageFields } from '../src/lib/age-band.ts';
 
 // ----- the full assessment, before Insight -----
 
@@ -131,6 +132,50 @@ test('full sitting: ONE message, the unchanged scored result plus the sweep, joi
 test('full sitting: the scored result alone still carries no sweep (control)', () => {
   // buildCapacityMessage is the scored half; the sweep is added only by buildFullMessage.
   assert.equal('sweep' in buildCapacityMessage(capacityInput()), false);
+});
+
+// ----- the age band on the message -----
+
+test('full sitting, band answered: the frozen payload plus sweep, ageBand and context, nothing else', () => {
+  const input = capacityInput();
+  const sweep = buildSweepEnvelope(ratings, input.completionId);
+  const msg = buildFullMessage(input, sweep, ageFields(null, '40s', true));
+  assert.deepStrictEqual(msg, {
+    ...legacyCapacityMessage(input.completionId, input),
+    sweep,
+    ageBand: '40s',
+    context: { age_band: '40s' },
+  });
+  assert.deepEqual(Object.keys(msg), ['type', 'completionId', 'metrics', 'rawData', 'sweep', 'ageBand', 'context']);
+});
+
+test('full sitting, band from the launch: context.age_band only, no ageBand (control)', () => {
+  const input = capacityInput();
+  const sweep = buildSweepEnvelope(ratings, input.completionId);
+  const msg = buildFullMessage(input, sweep, ageFields('50s', null, true));
+  assert.equal('ageBand' in msg, false);
+  assert.deepEqual(msg.context, { age_band: '50s' });
+  assert.deepStrictEqual(msg, { ...legacyCapacityMessage(input.completionId, input), sweep, context: { age_band: '50s' } });
+});
+
+test('full sitting, skipped: exactly the frozen payload plus sweep (control)', () => {
+  const input = capacityInput();
+  const sweep = buildSweepEnvelope(ratings, input.completionId);
+  const msg = buildFullMessage(input, sweep, ageFields(null, 'skip', true));
+  assert.deepStrictEqual(msg, { ...legacyCapacityMessage(input.completionId, input), sweep });
+});
+
+test('pace finder: ageBand only when answered, and never a context', () => {
+  const base = {
+    completionId: 'c-age', sweep: buildSweepEnvelope({}, 'c-age'), pick: selfReportPick({}),
+    rfSegments: [], rfRR: [], resonanceScores: [], deviceMode: 'none', rfSegmentMs: 90000, attempt: 1, phase: null,
+  };
+  const answered = buildPaceFinderMessage(base, ageFields(null, '30s', false));
+  assert.equal(answered.ageBand, '30s');
+  assert.equal('context' in answered, false);
+  const launched = buildPaceFinderMessage(base, ageFields('30s', null, false));
+  assert.equal('ageBand' in launched, false);
+  assert.deepStrictEqual(launched, buildPaceFinderMessage(base));
 });
 
 test('full assessment: caps still apply (2000 resting, 500 per rate)', () => {

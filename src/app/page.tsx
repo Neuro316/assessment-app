@@ -61,6 +61,25 @@ import {
 } from '@/lib/completion-message';
 import { simulationEnabled } from '@/lib/launch-flags';
 import {
+  AGE_BAND_LABELS,
+  AGE_BANDS,
+  ageFields,
+  ageQuestionNeeded,
+  knownAgeBand,
+  launchAgeBand,
+  type AgeAnswer,
+  type AgeBand,
+} from '@/lib/age-band';
+import { CARD_NOTES, METRIC_TIPS } from '@/lib/metric-copy';
+import {
+  placeMarker,
+  recoveryIndex,
+  referenceFor,
+  referenceLine,
+  zoneEdges,
+  type BandMetric,
+} from '@/lib/reference-bands';
+import {
   DEFAULT_CHOICE,
   draftModeOf,
   modeChoiceOffered,
@@ -199,26 +218,6 @@ function capacityLevel(rmssd: number): CapacityLevel {
     description:
       'Your system is holding its resources close. This is a deeply protective allocation that prioritises immediate readiness over long-range recovery. It reflects the load your system is carrying, not a limitation in you. Capacity is built back by lowering demand and making recovery reliably available.',
   };
-}
-
-// Recovery Index: a 0-100 presentation of RMSSD, anchored to the capacity thresholds
-// so the index and the level can never tell the participant two different stories.
-function recoveryIndex(rmssd: number): number {
-  const anchors: [number, number][] = [
-    [0, 0],
-    [15, 35],
-    [30, 60],
-    [50, 80],
-    [100, 100],
-  ];
-  if (rmssd <= 0) return 0;
-  if (rmssd >= 100) return 100;
-  for (let i = 1; i < anchors.length; i++) {
-    const [x1, y1] = anchors[i - 1];
-    const [x2, y2] = anchors[i];
-    if (rmssd <= x2) return Math.round(y1 + ((rmssd - x1) / (x2 - x1)) * (y2 - y1));
-  }
-  return 100;
 }
 
 function formatTime(ms: number): string {
@@ -541,22 +540,6 @@ function Toast({ text }: { text: string }) {
 }
 
 
-// What each headline number actually means, in the participant's language.
-const METRIC_TIPS: Record<string, string> = {
-  recovery:
-    'Your Recovery Index is derived from RMSSD, which measures the variation in timing between consecutive heartbeats. Higher variation means your nervous system can shift fluidly between activation and rest. This is the single strongest short-term indicator of how much capacity your system has available right now.',
-  heartRate:
-    'Your resting heart rate reflects how hard your cardiovascular system is working just to keep you at baseline. A lower resting heart rate generally means your system is running more efficiently, requiring less effort to maintain normal function. This number is influenced by fitness, hydration, sleep, and current stress load.',
-  breathRate:
-    'Your natural breathing pace at rest reflects your baseline level of physiological activation. Slower resting breath rates are associated with greater parasympathetic tone, meaning your system is spending less energy on activation and has more available for recovery and adaptation.',
-  coherence:
-    'Coherence measures how organized your heart rhythm is around a single dominant pattern. When coherence is high, your heart, lungs, and autonomic nervous system are working in sync. This is not about being calm — it is about being synchronized, which can happen during focused effort as well as during rest.',
-  complexity:
-    'Complexity is measured using Sample Entropy, which quantifies how many different response patterns your nervous system has available. Moderate complexity is the signature of a healthy, adaptive system — not rigid and repetitive, but not random either. It means your system has options and can flexibly shift between them as demands change.',
-  resonance:
-    'Your resonance frequency is the breathing pace where your heart rate variability reaches its peak amplitude. At this rate, each breath cycle maximally amplifies the natural oscillation in your heart rhythm. Breathing at this pace during training sessions produces the strongest cardiovascular training signal. Most adults resonate between 4.5 and 7.0 breaths per minute.',
-};
-
 // Panel is fixed-positioned and measured against the viewport rather than the card,
 // so it can never run off the edge of a narrow screen.
 interface TipAnchor {
@@ -680,6 +663,44 @@ function InfoTip({
   );
 }
 
+// Where this person's number sits against a typical resting range: three zones in one
+// neutral tone and a marker. No colours, arrows or state names. A value beyond the bar
+// pins the marker to that edge; the card's number above stays the true value.
+function ReferenceBar({
+  metric,
+  value,
+  ageBand,
+}: {
+  metric: BandMetric;
+  value: number | null;
+  ageBand: AgeBand | null;
+}) {
+  const ref = referenceFor(metric, ageBand);
+  const { lowPct, highPct } = zoneEdges(ref);
+  const marker = value != null && Number.isFinite(value) ? placeMarker(value, ref) : null;
+  return (
+    <div className="mt-3">
+      <div className="relative h-3" aria-hidden>
+        <div className="absolute inset-x-0 top-1/2 -translate-y-1/2 h-1.5 rounded-full overflow-hidden flex">
+          <span style={{ width: `${lowPct}%`, background: `${C.charcoal}14` }} />
+          <span style={{ width: `${highPct - lowPct}%`, background: `${C.charcoal}38` }} />
+          <span style={{ flex: 1, background: `${C.charcoal}14` }} />
+        </div>
+        {marker ? (
+          <span
+            data-marker-pct={marker.pct.toFixed(1)}
+            className="absolute top-0 h-3 rounded-full"
+            style={{ left: `${marker.pct}%`, width: 3, transform: 'translateX(-50%)', background: C.charcoal }}
+          />
+        ) : null}
+      </div>
+      <p className="mt-1.5 text-[11px] leading-snug" style={{ color: C.charcoal, opacity: 0.55 }}>
+        {referenceLine(metric, ref)}
+      </p>
+    </div>
+  );
+}
+
 function MetricCard({
   label,
   value,
@@ -689,6 +710,7 @@ function MetricCard({
   tipId,
   openTip,
   onToggleTip,
+  band,
 }: {
   label: string;
   value: string;
@@ -698,6 +720,7 @@ function MetricCard({
   tipId: string;
   openTip: string | null;
   onToggleTip: (id: string | null) => void;
+  band: { metric: BandMetric; value: number | null; ageBand: AgeBand | null };
 }) {
   return (
     <div className="relative rounded-xl bg-white p-5 border" style={{ borderColor: C.mist }}>
@@ -721,6 +744,7 @@ function MetricCard({
       <p className="mt-2 text-xs leading-relaxed" style={{ color: C.charcoal, opacity: 0.62 }}>
         {note}
       </p>
+      <ReferenceBar {...band} />
     </div>
   );
 }
@@ -820,6 +844,9 @@ export default function AssessmentPage() {
   const [chosenMode, setChosenMode] = useState<SittingMode>(DEFAULT_CHOICE);
   // "Use simulation" is offered only on a test launch (&sim=1); see launch-flags.ts.
   const [simAllowed, setSimAllowed] = useState(false);
+  // The age band, from the launch link or the welcome question (age-band.ts). A range only.
+  const [launchBand, setLaunchBand] = useState<AgeBand | null>(null);
+  const [ageAnswer, setAgeAnswer] = useState<AgeAnswer>(null);
   // Who the launch token says this is, once /api/verify-launch has vouched for it.
   // null without a valid token. Read by nothing yet.
   const [launchPersonId, setLaunchPersonId] = useState<string | null>(null);
@@ -935,6 +962,7 @@ export default function AssessmentPage() {
     setJourneyPhase(params.get('phase'));
     if (params.get('fast') === '1') setFastMode(true);
     setSimAllowed(simulationEnabled(params));
+    setLaunchBand(launchAgeBand(params));
     // ⚠ No `mode` param is read. The protocol is chosen per sitting on the welcome
     // screen, so an `&mode=insight` on the launch link has no effect.
 
@@ -1022,6 +1050,7 @@ export default function AssessmentPage() {
       assessmentNumber,
       connMode,
       mode: paceFinder ? 'pace-finder' : 'full',
+      ageAnswer,
       sweepRatings,
       ratingSegment,
       restingRR: restingRRRef.current,
@@ -1056,6 +1085,7 @@ export default function AssessmentPage() {
       paceFinder,
       sweepRatings,
       ratingSegment,
+      ageAnswer,
     ]
   );
 
@@ -1428,6 +1458,7 @@ export default function AssessmentPage() {
     setRatingSegment('pre');
     setDraftRatings(emptyRatingSet());
     setChosenMode(DEFAULT_CHOICE);
+    setAgeAnswer(null);
     setPhase('connect');
   }, []);
 
@@ -1446,6 +1477,7 @@ export default function AssessmentPage() {
     setDraftRatings({ ...emptyRatingSet(), ...(saved.sweepRatings?.[saved.ratingSegment ?? 'pre'] ?? {}) } as SweepRatingSet);
     if (saved.connMode === 'none') setConnMode('none');
     setChosenMode(draftModeOf(saved.mode));
+    setAgeAnswer(saved.ageAnswer ?? null);
 
     restingRRRef.current = saved.restingRR || [];
     rfRRRef.current = RF_RATES.map((_, i) => saved.rfRR?.[i] ?? []);
@@ -1602,14 +1634,18 @@ export default function AssessmentPage() {
       attempt: assessmentNumber,
       phase: journeyPhase,
       level,
-    }, sweep);
+    }, sweep, ageFields(launchBand, ageAnswer, true));
     await deliver(message, {
       mode: 'full',
       metricKeys: Object.keys(message.metrics).length,
       recoveryIndex: message.metrics.recoveryIndex,
       sweepItems: sweep.items.length,
+      ageBand: 'ageBand' in message,
+      contextAgeBand: 'context' in message,
     });
   }, [
+    launchBand,
+    ageAnswer,
     sittingCompletionId,
     packagedSweep,
     deliver,
@@ -1655,13 +1691,16 @@ export default function AssessmentPage() {
       rfSegmentMs,
       attempt: assessmentNumber,
       phase: journeyPhase,
-    });
+    }, ageFields(launchBand, ageAnswer, false));
     await deliver(message, {
       mode: 'pace-finder',
       sweepItems: sweep.items.length,
       pickSource: paceFinderPick.source,
+      ageBand: 'ageBand' in message,
     });
   }, [
+    launchBand,
+    ageAnswer,
     sittingCompletionId,
     packagedSweep,
     deliver,
@@ -1684,7 +1723,10 @@ export default function AssessmentPage() {
   const showAbort = ACTIVE_PHASES.includes(phase);
   // Begin once an armband is connected (a mode is then chosen) or declined (the pace
   // finder on self-report).
-  const canStart = connState === 'connected' || connMode === 'none';
+  // The age question, when shown, needs an answer first; "Skip" is an answer.
+  const ageAsked = ageQuestionNeeded(launchBand);
+  const canStart = (connState === 'connected' || connMode === 'none') && (!ageAsked || ageAnswer !== null);
+  const ageBand = knownAgeBand(launchBand, ageAnswer);
   const allChecked = checks.every(Boolean);
 
   return (
@@ -1862,6 +1904,38 @@ export default function AssessmentPage() {
                           </span>
                         </span>
                         {selected ? <Check /> : null}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            ) : null}
+
+            {/* Asked once, and only when the launch link carried no age band. A range,
+                a range only; "Skip" is a full answer. */}
+            {ageAsked ? (
+              <div className="mb-6" role="radiogroup" aria-label="Your age range">
+                <p className="text-sm font-medium mb-2" style={{ color: C.indigo }}>
+                  Your age range
+                </p>
+                <div className="grid grid-cols-3 gap-2">
+                  {[...AGE_BANDS, 'skip' as const].map((choice) => {
+                    const selected = ageAnswer === choice;
+                    return (
+                      <button
+                        key={choice}
+                        role="radio"
+                        aria-checked={selected}
+                        onClick={() => setAgeAnswer(choice)}
+                        className="rounded-xl px-2 py-2.5 text-xs font-medium border"
+                        style={{
+                          borderColor: selected ? C.blue : C.mist,
+                          background: selected ? `${C.blue}0f` : '#fff',
+                          color: choice === 'skip' && !selected ? C.charcoal : C.indigo,
+                          opacity: choice === 'skip' && !selected ? 0.7 : 1,
+                        }}
+                      >
+                        {choice === 'skip' ? 'Skip' : AGE_BAND_LABELS[choice]}
                       </button>
                     );
                   })}
@@ -2402,7 +2476,8 @@ export default function AssessmentPage() {
                 value={String(recovery)}
                 unit="/ 100"
                 accent={level.color}
-                note="How much resource your system currently has free for repair and adaptation."
+                note={CARD_NOTES.recovery}
+                band={{ metric: 'recovery', value: restingMetrics ? recovery : null, ageBand }}
               />
               <MetricCard
                 label="Heart Rate"
@@ -2411,7 +2486,8 @@ export default function AssessmentPage() {
                 onToggleTip={toggleTip}
                 value={restingMetrics ? String(Math.round(restingMetrics.meanHR)) : '—'}
                 unit="bpm"
-                note="Your resting pace — the baseline cost of running your system right now."
+                note={CARD_NOTES.heartRate}
+                band={{ metric: 'heartRate', value: restingMetrics?.meanHR ?? null, ageBand }}
               />
               <MetricCard
                 label="Breath Rate"
@@ -2420,7 +2496,8 @@ export default function AssessmentPage() {
                 onToggleTip={toggleTip}
                 value={restingMetrics ? restingMetrics.breathRate.toFixed(1) : '—'}
                 unit="br/min"
-                note="How fast you breathe when nothing is being asked of you."
+                note={CARD_NOTES.breathRate}
+                band={{ metric: 'breathRate', value: restingMetrics?.breathRate ?? null, ageBand }}
               />
               <MetricCard
                 label="Coherence"
@@ -2429,7 +2506,8 @@ export default function AssessmentPage() {
                 onToggleTip={toggleTip}
                 value={restingMetrics?.coherence != null ? restingMetrics.coherence.toFixed(0) : '—'}
                 unit="%"
-                note="How closely your heart rhythm and your breath moved together at rest."
+                note={CARD_NOTES.coherence}
+                band={{ metric: 'coherence', value: restingMetrics?.coherence ?? null, ageBand }}
               />
               <MetricCard
                 label="Complexity"
@@ -2437,7 +2515,8 @@ export default function AssessmentPage() {
                 openTip={openTip}
                 onToggleTip={toggleTip}
                 value={restingMetrics?.sampEn != null ? restingMetrics.sampEn.toFixed(2) : '—'}
-                note="The adaptive range in your signal — room to respond to whatever comes next."
+                note={CARD_NOTES.complexity}
+                band={{ metric: 'complexity', value: restingMetrics?.sampEn ?? null, ageBand }}
               />
               <MetricCard
                 label="Resonance"
@@ -2446,7 +2525,8 @@ export default function AssessmentPage() {
                 onToggleTip={toggleTip}
                 value={resonance.rate.toFixed(1)}
                 unit="br/min"
-                note="The breath rate your system amplifies most. This is where to practise."
+                note={CARD_NOTES.resonance}
+                band={{ metric: 'resonance', value: resonance.rate, ageBand }}
               />
             </div>
 

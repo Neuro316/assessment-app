@@ -17,6 +17,10 @@
 import type { HRVMetrics } from './hrv-metrics';
 import type { RFSegment } from './resonance';
 import type { SweepEnvelope } from './insight-sweep';
+import type { ageFields } from './age-band';
+
+// The age band's fields (age-band.ts), added after everything else when present.
+export type AgeFields = ReturnType<typeof ageFields>;
 
 export const COMPLETE_MESSAGE = 'assessment-complete';
 
@@ -101,9 +105,10 @@ export function buildCapacityMessage(input: CapacityMessageInput) {
   };
 }
 
-// A full-assessment sitting: the scored result exactly as before, plus the sweep.
-export function buildFullMessage(input: CapacityMessageInput, sweep: SweepEnvelope) {
-  return { ...buildCapacityMessage(input), sweep };
+// A full-assessment sitting: the scored result exactly as before, plus the sweep, plus
+// the age band's fields when there are any (`ageBand`, `context.age_band`).
+export function buildFullMessage(input: CapacityMessageInput, sweep: SweepEnvelope, age: AgeFields = {}) {
+  return { ...buildCapacityMessage(input), sweep, ...age };
 }
 
 // The pace-finder pick, with where it came from. A self-reported pick is the rate the
@@ -126,7 +131,8 @@ export interface PaceFinderMessageInput {
   phase: string | null;
 }
 
-export function buildPaceFinderMessage(input: PaceFinderMessageInput) {
+// `age` carries `ageBand` only: there is no scored result here for a context to belong to.
+export function buildPaceFinderMessage(input: PaceFinderMessageInput, age: Pick<AgeFields, 'ageBand'> = {}) {
   const measured = input.pick.source === 'measured';
   return {
     type: COMPLETE_MESSAGE,
@@ -152,5 +158,6 @@ export function buildPaceFinderMessage(input: PaceFinderMessageInput) {
       phase: input.phase,
     },
     sweep: input.sweep,
+    ...(age.ageBand ? { ageBand: age.ageBand } : {}),
   };
 }

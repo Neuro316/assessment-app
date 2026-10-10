@@ -44,6 +44,9 @@ export interface SessionState {
   // Drafts saved before the per-sitting choice used 'capacity' and 'insight'; a draft
   // with no mode was a full assessment. Read through draftModeOf (sitting-mode.ts).
   mode?: 'full' | 'pace-finder' | 'capacity' | 'insight';
+  // The welcome question's answer: an age band, 'skip', or null (not asked or not yet
+  // answered). A range only. See age-band.ts.
+  ageAnswer?: 'under30' | '30s' | '40s' | '50s' | '60plus' | 'skip' | null;
   // The sweep ratings given so far, by segment, and the segment being rated.
   sweepRatings?: Partial<Record<string, Partial<Record<string, number | null>>>>;
   ratingSegment?: string;
