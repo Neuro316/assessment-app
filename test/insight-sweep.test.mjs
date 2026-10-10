@@ -7,6 +7,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import {
+  PICK_SCALES,
   SWEEP_SEGMENTS,
   SWEEP_SCALES,
   buildSweepEnvelope,
@@ -136,6 +137,41 @@ test('context.session_id must equal the completionId (§K.7 join)', () => {
   const env = buildSweepEnvelope(fullRatings(), ID);
   assert.deepEqual(validateSweepEnvelope(env, ID), [], 'control');
   assert.ok(validateSweepEnvelope(env, 'c-other-sitting').includes('context.session_id must equal the completionId'));
+});
+
+// ----- the pick: grounded, focused and presence; energy recorded but unweighted -----
+// (ruled by Cameron 2026-10-10)
+
+test('pick: averages exactly grounded, focused and presence', () => {
+  assert.deepEqual([...PICK_SCALES], ['grounded', 'focused', 'presence']);
+});
+
+test('pick: a rate that scores higher ONLY on energy does not win', () => {
+  const r = fullRatings(); // every scale at every rate is 3
+  r['rate_6'] = { grounded: 3, focused: 3, energy: 5, presence: 3 };
+  // Control: the fixture discriminates. Averaged over all four scales, as before the
+  // ruling, rate_6 WOULD win (3.5 against 3), so a pass below is the ruling at work.
+  const fourScaleMean = (set) => (set.grounded + set.focused + set.energy + set.presence) / 4;
+  assert.ok(fourScaleMean(r['rate_6']) > fourScaleMean(r['rate_4.5']));
+  // On the three ruled scales every rate is 3, so the tie goes to the slower rate.
+  assert.deepEqual(selfReportPick(r), { rate: 4.5, source: 'self_report' });
+});
+
+test('pick: a higher counted scale still wins, however low energy is (control)', () => {
+  const r = fullRatings();
+  r['rate_6'] = { grounded: 4, focused: 3, energy: 1, presence: 3 }; // 3.33 on the three
+  assert.equal(selfReportPick(r).rate, 6);
+});
+
+test('pick: a rate rated only on energy cannot be picked', () => {
+  assert.deepEqual(selfReportPick({ rate_5: { energy: 5 } }), { rate: null, source: 'self_report' });
+});
+
+test('pick: energy is still recorded in the sweep, unchanged', () => {
+  const r = fullRatings();
+  r['rate_6'].energy = 5;
+  const item = buildSweepEnvelope(r, ID).items.find((i) => i.key === 'energy' && i.segment === 'rate_6');
+  assert.equal(item.value, 5);
 });
 
 test('self-report pick: the rate rated best, labelled self-reported', () => {
