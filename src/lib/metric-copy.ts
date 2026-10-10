@@ -31,6 +31,10 @@ export const CARD_NOTES: Record<string, string> = {
 };
 
 // The keys whose text holds an em dash (U+2014). Empty means clean.
+// The resonance card's note when the armband lost the signal and the pace shown is the
+// one the person rated best (resonance.ts: fewer than two rates had enough beats).
+export const RATED_PACE_NOTE = 'The pace you rated best. The armband signal was lost, so it was not measured.';
+
 export function keysWithEmDash(copy: Record<string, string>): string[] {
   return Object.keys(copy).filter((k) => copy[k].includes('—'));
 }

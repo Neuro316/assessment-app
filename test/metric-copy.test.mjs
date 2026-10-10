@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
-import { CARD_NOTES, METRIC_TIPS, keysWithEmDash } from '../src/lib/metric-copy.ts';
+import { CARD_NOTES, METRIC_TIPS, RATED_PACE_NOTE, keysWithEmDash } from '../src/lib/metric-copy.ts';
 
 test('no em dash remains in METRIC_TIPS', () => {
   assert.deepEqual(keysWithEmDash(METRIC_TIPS), []);
@@ -14,6 +14,10 @@ test('no em dash remains in METRIC_TIPS', () => {
 
 test('no em dash remains in the card notes', () => {
   assert.deepEqual(keysWithEmDash(CARD_NOTES), []);
+});
+
+test('no em dash in the rated-pace note', () => {
+  assert.deepEqual(keysWithEmDash({ ratedPace: RATED_PACE_NOTE }), []);
 });
 
 test('control: a planted em dash fails the check', () => {
@@ -38,5 +42,8 @@ test('every card has a tip and a note', () => {
 test('the page writes no card note inline', () => {
   const page = readFileSync(new URL('../src/app/page.tsx', import.meta.url), 'utf8');
   assert.equal(/note="/.test(page), false);
-  assert.equal((page.match(/note=\{CARD_NOTES\./g) || []).length, 6, 'control');
+  // Five cards take CARD_NOTES directly; the resonance card picks between CARD_NOTES and
+  // RATED_PACE_NOTE (signal lost).
+  assert.equal((page.match(/note=\{CARD_NOTES\./g) || []).length, 5, 'control');
+  assert.match(page, /note=\{resonance\.rate !== null \? CARD_NOTES\.resonance : RATED_PACE_NOTE\}/);
 });

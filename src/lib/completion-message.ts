@@ -2,8 +2,11 @@
 // What the assessment hands the University when a sitting ends, over the existing
 // origin-checked `assessment-complete` message.
 //
-// buildCapacityMessage is the full assessment's scored result, extracted UNCHANGED
-// from the inline object that used to live in page.tsx's finalize().
+// buildCapacityMessage is the full assessment's scored result, extracted from the inline
+// object that used to live in page.tsx's finalize(). Changed since in two ways only:
+// each rf_results entry carries `sufficient` and `clean_ms`, and the measured frequency
+// is null when too few rates had enough clean signal to measure. recoveryIndex is null
+// when the resting block produced no metrics (it used to read 0).
 //
 // buildFullMessage is what a full-assessment sitting sends: that scored result plus
 // the sweep envelope under `sweep`, in ONE assessment-complete message, joined by
@@ -15,7 +18,7 @@
 // Pure: no React, no browser APIs, no runtime imports.
 
 import type { HRVMetrics } from './hrv-metrics';
-import type { RFSegment } from './resonance';
+import type { RFSegment, RateSufficiency, ResonanceResult } from './resonance';
 import type { SweepEnvelope } from './insight-sweep';
 import type { ageFields } from './age-band';
 
@@ -34,8 +37,9 @@ export type DeviceMode = 'ble' | 'sim' | 'none' | null;
 export interface CapacityMessageInput {
   completionId: string;
   restingMetrics: HRVMetrics | null;
-  recoveryIndex: number;
-  resonance: { rate: number; scores: number[] };
+  // null when the resting block produced no metrics.
+  recoveryIndex: number | null;
+  resonance: ResonanceResult;
   restingRR: number[];
   rfSegments: RFSegment[];
   rfRR: number[][];
@@ -47,6 +51,14 @@ export interface CapacityMessageInput {
   level: { key: string; label: string };
 }
 
+// Per rate: whether its window held enough clean signal to be measured, and how much
+// it held (resonance.ts rateSufficiency). An insufficient rate is never the measured pick.
+function sufficiencyFields(s: RateSufficiency | undefined) {
+  return { sufficient: s?.sufficient ?? false, clean_ms: s?.clean_ms ?? 0 };
+}
+
+// resonanceFreq / resonance_freq are null when fewer than two rates were sufficient:
+// no measured pick exists then, and the pick in resonance_pick is the self-reported one.
 export function buildCapacityMessage(input: CapacityMessageInput) {
   const m = input.restingMetrics;
   const resonance = input.resonance;
@@ -88,6 +100,7 @@ export function buildCapacityMessage(input: CapacityMessageInput) {
         rmssd: seg.metrics?.rmssd ?? null,
         rr_count: seg.rrCount,
         resonance_score: Math.round((resonance.scores[i] ?? 0) * 1000) / 1000,
+        ...sufficiencyFields(resonance.sufficiency[i]),
       })),
       rf_rr_per_rate: input.rfRR.map((rr) => rr.slice(0, MAX_RF_RR_PER_RATE)),
       resonance_freq: resonance.rate,
@@ -108,6 +121,10 @@ export function buildCapacityMessage(input: CapacityMessageInput) {
 // A full-assessment sitting: the scored result exactly as before, plus the sweep, plus
 // the age band's fields when there are any (`ageBand`, `context.age_band`).
 //
+// rawData also gains `resonance_pick` {rate, source}: the measured rate with source
+// 'measured' when there is one, otherwise the self-report pick with source 'self_report'
+// (the armband lost the signal; resonance_freq is then null).
+//
 // rawData also gains `self_report_pick`: the pace the person RATED best (insight-sweep.ts
 // selfReportPick: grounded, focused and presence averaged, ties to the slower rate; null
 // with nothing to compare). It sits beside the MEASURED pick (`resonance_freq`) and may
@@ -119,9 +136,14 @@ export function buildFullMessage(
   age: AgeFields = {}
 ) {
   const scored = buildCapacityMessage(input);
+  const measuredRate = input.resonance.rate;
+  const pick: ResonancePick =
+    measuredRate !== null
+      ? { rate: measuredRate, source: 'measured' }
+      : { rate: selfReport.rate, source: 'self_report' };
   return {
     ...scored,
-    rawData: { ...scored.rawData, self_report_pick: { rate: selfReport.rate } },
+    rawData: { ...scored.rawData, self_report_pick: { rate: selfReport.rate }, resonance_pick: pick },
     sweep,
     ...age,
   };
@@ -141,6 +163,8 @@ export interface PaceFinderMessageInput {
   rfSegments: RFSegment[];
   rfRR: number[][];
   resonanceScores: number[];
+  // Per rate, from pickResonance; empty without an armband.
+  rfSufficiency: RateSufficiency[];
   deviceMode: DeviceMode;
   rfSegmentMs: number;
   attempt: number;
@@ -166,6 +190,7 @@ export function buildPaceFinderMessage(input: PaceFinderMessageInput, age: Pick<
         rmssd: seg.metrics?.rmssd ?? null,
         rr_count: seg.rrCount,
         resonance_score: Math.round((input.resonanceScores[i] ?? 0) * 1000) / 1000,
+        ...sufficiencyFields(input.rfSufficiency[i]),
       })),
       rf_rr_per_rate: input.rfRR.map((rr) => rr.slice(0, MAX_RF_RR_PER_RATE)),
       device_mode: input.deviceMode,

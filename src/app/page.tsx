@@ -53,13 +53,13 @@ import {
 } from '@/lib/bluetooth';
 import BreathPacer from '@/components/BreathPacer';
 import { computeAllMetrics, type HRVMetrics } from '@/lib/hrv-metrics';
-import { pickResonance, type RFSegment } from '@/lib/resonance';
+import { cleanMs as cleanSignalMs, pickResonance, type RFSegment } from '@/lib/resonance';
 import {
   buildFullMessage,
   buildPaceFinderMessage,
   type ResonancePick,
 } from '@/lib/completion-message';
-import { simulationEnabled } from '@/lib/launch-flags';
+import { inDropWindow, simDropWindows, simulationEnabled, type DropWindow } from '@/lib/launch-flags';
 import {
   AGE_BAND_LABELS,
   AGE_BANDS,
@@ -70,7 +70,7 @@ import {
   type AgeAnswer,
   type AgeBand,
 } from '@/lib/age-band';
-import { CARD_NOTES, METRIC_TIPS } from '@/lib/metric-copy';
+import { CARD_NOTES, METRIC_TIPS, RATED_PACE_NOTE } from '@/lib/metric-copy';
 import {
   placeMarker,
   recoveryIndex,
@@ -126,6 +126,8 @@ const RF_SEGMENT_MS = 2 * 60 * 1000;
 // The pace finder runs each rate for 90 s; the full assessment keeps 2 minutes.
 const PACE_FINDER_SEGMENT_MS = 90 * 1000;
 const RF_RATES = [4.5, 5.0, 5.5, 6.0, 6.5, 7.0];
+// A result card's value when its metric could not be computed (no em dash).
+const NOT_MEASURED = 'n/a';
 
 // The recorded voice track in public/Audio, in protocol order. `rate` is indexed
 // by RF_RATES, so 6.mp3 is 4.5 br/min through 11.mp3 at 7.0.
@@ -892,6 +894,8 @@ export default function AssessmentPage() {
   const segStartRef = useRef(0);
   const segDoneRef = useRef(false);
   const pausedRef = useRef<number | null>(null);
+  // Test only (&sim=1&drop=...): windows of recording time when the simulated strap is silent.
+  const simDropsRef = useRef<DropWindow[]>([]);
   // Bumped on restart. Anything resumed after an await must check it still matches,
   // since cancelAudio settles pending clip promises rather than leaving them hanging.
   const runGenerationRef = useRef(0);
@@ -962,6 +966,7 @@ export default function AssessmentPage() {
     setJourneyPhase(params.get('phase'));
     if (params.get('fast') === '1') setFastMode(true);
     setSimAllowed(simulationEnabled(params));
+    simDropsRef.current = simDropWindows(params);
     setLaunchBand(launchAgeBand(params));
     // ⚠ No `mode` param is read. The protocol is chosen per sitting on the welcome
     // screen, so an `&mode=insight` on the launch link has no effect.
@@ -1120,6 +1125,23 @@ export default function AssessmentPage() {
   }, []);
 
   // ----- streaming -----
+  // Test only: is the simulated strap inside a &drop= window? Recording time is the
+  // resting block, then the paces back to back (ratings and intros excluded).
+  const rfIndexRef = useRef(0);
+  rfIndexRef.current = rfIndex;
+  const dropTimingRef = useRef({ restingMs, rfSegmentMs, paceFinder });
+  dropTimingRef.current = { restingMs, rfSegmentMs, paceFinder };
+  const simMuted = useCallback((): boolean => {
+    const windows = simDropsRef.current;
+    if (!windows.length) return false;
+    const p = phaseRef.current;
+    const inSegment = pausedRef.current ?? Date.now() - segStartRef.current;
+    const { restingMs: rest, rfSegmentMs: seg, paceFinder: pf } = dropTimingRef.current;
+    if (p === 'resting') return inDropWindow(windows, inSegment);
+    if (p === 'rf') return inDropWindow(windows, (pf ? 0 : rest) + rfIndexRef.current * seg + inSegment);
+    return false;
+  }, []);
+
   const handleData = useCallback((d: HRDataPoint) => {
     if (d.heartRate > 0) setHr(d.heartRate);
     if (d.rrIntervals.length) {
@@ -1221,7 +1243,7 @@ export default function AssessmentPage() {
 
   const reconnectSimulated = useCallback(() => {
     adoptConnection(
-      connectSimulated(handleData, handleDisconnect, { onBattery: setBattery }),
+      connectSimulated(handleData, handleDisconnect, { onBattery: setBattery, isMuted: simMuted }),
       'sim'
     );
     resumeAfterReconnect();
@@ -1236,7 +1258,7 @@ export default function AssessmentPage() {
       if (mode === 'sim') {
         try {
           adoptConnection(
-            connectSimulated(handleData, handleDisconnect, { onBattery: setBattery }),
+            connectSimulated(handleData, handleDisconnect, { onBattery: setBattery, isMuted: simMuted }),
             'sim'
           );
           playAudio(AUDIO.welcome);
@@ -1354,7 +1376,7 @@ export default function AssessmentPage() {
     const rr = rfRRRef.current[index];
     setRfSegments((prev) => [
       ...prev,
-      { rate: RF_RATES[index], metrics: computeAllMetrics(rr), rrCount: rr.length },
+      { rate: RF_RATES[index], metrics: computeAllMetrics(rr), rrCount: rr.length, cleanMs: cleanSignalMs(rr) },
     ]);
 
     // Both modes follow every rate with the four scales, so the next rate waits for the
@@ -1470,7 +1492,10 @@ export default function AssessmentPage() {
     setAssessmentNumber(saved.assessmentNumber);
     setChecks(saved.checks ?? [false, false, false, false]);
     setRestingMetrics(saved.restingMetrics);
-    setRfSegments(saved.rfSegments);
+    // Drafts saved before clean time existed get it from their stored beats.
+    setRfSegments(
+      saved.rfSegments.map((seg, i) => ({ ...seg, cleanMs: seg.cleanMs ?? cleanSignalMs(saved.rfRR?.[i] ?? []) }))
+    );
     setRfIndex(saved.rfIndex);
     setSweepRatings((saved.sweepRatings as SweepRatings | undefined) ?? {});
     setRatingSegment(saved.ratingSegment ?? 'pre');
@@ -1515,20 +1540,31 @@ export default function AssessmentPage() {
   }, []);
 
   // ===== RESULTS =====
-  const resonance = useMemo(() => pickResonance(rfSegments), [rfSegments]);
+  const resonance = useMemo(() => pickResonance(rfSegments, rfSegmentMs), [rfSegments, rfSegmentMs]);
+  // The pace the result screen shows: the measured one, or, when the armband lost the
+  // signal (fewer than two rates had enough beats), the one the person rated best.
+  const shownPace = useMemo(
+    () => (resonance.rate !== null ? resonance.rate : selfReportPick(sweepRatings).rate),
+    [resonance, sweepRatings]
+  );
   const level = useMemo(() => capacityLevel(restingMetrics?.rmssd ?? 0), [restingMetrics]);
   const recovery = useMemo(() => recoveryIndex(restingMetrics?.rmssd ?? 0), [restingMetrics]);
 
   const chartData = useMemo(
     () =>
-      rfSegments.map((s, i) => ({
+      rfSegments.map((s, i) => {
+        // An insufficient rate is drawn as a gap with a muted tick, never as 0.
+        const ok = resonance.sufficiency[i]?.sufficient ?? false;
+        return {
         rate: s.rate,
-        sdnn: s.metrics ? Math.round(s.metrics.sdnn) : 0,
-        rmssd: s.metrics ? Math.round(s.metrics.rmssd) : 0,
+        sufficient: ok,
+        sdnn: ok && s.metrics ? Math.round(s.metrics.sdnn) : null,
+        rmssd: ok && s.metrics ? Math.round(s.metrics.rmssd) : null,
         // null leaves a gap in the chart rather than drawing a fake zero.
-        coherence: s.metrics ? s.metrics.coherence : null,
+        coherence: ok && s.metrics ? s.metrics.coherence : null,
         score: Math.round((resonance.scores[i] ?? 0) * 100),
-      })),
+        };
+      }),
     [rfSegments, resonance]
   );
 
@@ -1623,7 +1659,8 @@ export default function AssessmentPage() {
     const message = buildFullMessage({
       completionId,
       restingMetrics,
-      recoveryIndex: recovery,
+      // null, not 0, when the resting block produced no metrics.
+      recoveryIndex: restingMetrics ? recovery : null,
       resonance,
       restingRR: restingRRRef.current,
       rfSegments,
@@ -1667,7 +1704,7 @@ export default function AssessmentPage() {
   // rated best, labelled self-reported and never presented as a measured frequency.
   const paceFinderPick = useMemo<ResonancePick>(
     () =>
-      measured
+      measured && resonance.rate !== null
         ? { rate: resonance.rate, source: 'measured' }
         : selfReportPick(sweepRatings),
     [measured, resonance, sweepRatings]
@@ -1689,6 +1726,7 @@ export default function AssessmentPage() {
       rfSegments: measured ? rfSegments : [],
       rfRR: measured ? rfRRRef.current : [],
       resonanceScores: measured ? resonance.scores : [],
+      rfSufficiency: measured ? resonance.sufficiency : [],
       deviceMode: connMode,
       rfSegmentMs,
       attempt: assessmentNumber,
@@ -2353,13 +2391,26 @@ export default function AssessmentPage() {
           <div className="w-full max-w-xl mx-auto" style={{ animation: 'fade-in 0.5s ease-out' }}>
             <div className="rounded-2xl bg-white p-7 border" style={{ borderColor: C.mist }}>
               <h2 className="text-xl font-semibold mb-2" style={{ color: C.indigo }}>
-                Your resonance frequency
+                {resonance.rate !== null ? 'Your resonance frequency' : 'Your breathing pace'}
               </h2>
-              <p className="text-sm leading-relaxed mb-6" style={{ opacity: 0.72 }}>
-                Your heart responded most strongly at{' '}
-                <strong style={{ color: C.blue }}>{resonance.rate.toFixed(1)} breaths per minute</strong>
-                . That is the pace at which your breath and your heart rhythm reinforce each other.
-              </p>
+              {resonance.rate !== null ? (
+                <p className="text-sm leading-relaxed mb-6" style={{ opacity: 0.72 }}>
+                  Your heart responded most strongly at{' '}
+                  <strong style={{ color: C.blue }}>{resonance.rate.toFixed(1)} breaths per minute</strong>
+                  . That is the pace at which your breath and your heart rhythm reinforce each other.
+                </p>
+              ) : (
+                <p className="text-sm leading-relaxed mb-6" style={{ opacity: 0.72 }} data-signal-lost>
+                  {shownPace !== null ? (
+                    <>
+                      The armband signal was lost during the paces. The pace shown is from your ratings.{' '}
+                      <strong style={{ color: C.blue }}>{shownPace.toFixed(1)} breaths per minute</strong>
+                    </>
+                  ) : (
+                    'The armband signal was lost during the paces and no pace could be chosen.'
+                  )}
+                </p>
+              )}
 
               <div style={{ height: 240 }}>
                 <ResponsiveContainer width="100%" height="100%">
@@ -2367,16 +2418,40 @@ export default function AssessmentPage() {
                     <CartesianGrid stroke={C.mist} vertical={false} />
                     <XAxis
                       dataKey="rate"
-                      tick={{ fontSize: 11, fill: C.charcoal }}
                       stroke={C.mist}
-                      tickFormatter={(v) => Number(v).toFixed(1)}
+                      // Room at both ends so a lone point on the first or last rate is not clipped.
+                      padding={{ left: 12, right: 12 }}
+                      // A rate without enough clean signal keeps its place on the axis, faded.
+                      tick={({ x, y, payload }: { x: number; y: number; payload: { value: number } }) => {
+                        const ok = chartData.find((d) => d.rate === payload.value)?.sufficient ?? false;
+                        return (
+                          <text
+                            x={x}
+                            y={y + 12}
+                            textAnchor="middle"
+                            fontSize={11}
+                            fill={C.charcoal}
+                            opacity={ok ? 1 : 0.35}
+                            data-insufficient={ok ? undefined : 'true'}
+                          >
+                            {Number(payload.value).toFixed(1)}
+                          </text>
+                        );
+                      }}
                     />
                     <YAxis tick={{ fontSize: 11, fill: C.charcoal }} stroke={C.mist} width={44} />
                     <Tooltip
                       contentStyle={{ borderRadius: 10, border: `1px solid ${C.mist}`, fontSize: 12 }}
                       labelFormatter={(v) => `${Number(v).toFixed(1)} breaths / min`}
                     />
-                    <ReferenceLine x={resonance.rate} stroke={C.green} strokeDasharray="4 4" strokeWidth={2} />
+                    {chartData
+                      .filter((d) => !d.sufficient)
+                      .map((d) => (
+                        <ReferenceLine key={`muted-${d.rate}`} x={d.rate} stroke={C.mist} strokeWidth={10} strokeOpacity={0.6} />
+                      ))}
+                    {resonance.rate !== null ? (
+                      <ReferenceLine x={resonance.rate} stroke={C.green} strokeDasharray="4 4" strokeWidth={2} />
+                    ) : null}
                     <Line
                       type="monotone"
                       dataKey="sdnn"
@@ -2406,10 +2481,18 @@ export default function AssessmentPage() {
                   <span style={{ width: 14, height: 2, background: C.amber, display: 'inline-block' }} />
                   Coherence
                 </span>
-                <span className="flex items-center gap-1.5">
-                  <span style={{ width: 14, height: 2, background: C.green, display: 'inline-block' }} />
-                  Your resonance
-                </span>
+                {resonance.rate !== null ? (
+                  <span className="flex items-center gap-1.5">
+                    <span style={{ width: 14, height: 2, background: C.green, display: 'inline-block' }} />
+                    Your resonance
+                  </span>
+                ) : null}
+                {chartData.some((d) => !d.sufficient) ? (
+                  <span className="flex items-center gap-1.5">
+                    <span style={{ width: 10, height: 10, background: C.mist, display: 'inline-block' }} />
+                    Too little signal
+                  </span>
+                ) : null}
               </div>
 
               {saveError ? (
@@ -2475,7 +2558,7 @@ export default function AssessmentPage() {
                 tipId="recovery"
                 openTip={openTip}
                 onToggleTip={toggleTip}
-                value={String(recovery)}
+                value={restingMetrics ? String(recovery) : NOT_MEASURED}
                 unit="/ 100"
                 accent={level.color}
                 note={CARD_NOTES.recovery}
@@ -2486,7 +2569,7 @@ export default function AssessmentPage() {
                 tipId="heartRate"
                 openTip={openTip}
                 onToggleTip={toggleTip}
-                value={restingMetrics ? String(Math.round(restingMetrics.meanHR)) : '—'}
+                value={restingMetrics ? String(Math.round(restingMetrics.meanHR)) : NOT_MEASURED}
                 unit="bpm"
                 note={CARD_NOTES.heartRate}
                 band={{ metric: 'heartRate', value: restingMetrics?.meanHR ?? null, ageBand }}
@@ -2496,7 +2579,7 @@ export default function AssessmentPage() {
                 tipId="breathRate"
                 openTip={openTip}
                 onToggleTip={toggleTip}
-                value={restingMetrics ? restingMetrics.breathRate.toFixed(1) : '—'}
+                value={restingMetrics?.breathRate != null ? restingMetrics.breathRate.toFixed(1) : NOT_MEASURED}
                 unit="br/min"
                 note={CARD_NOTES.breathRate}
                 band={{ metric: 'breathRate', value: restingMetrics?.breathRate ?? null, ageBand }}
@@ -2506,7 +2589,7 @@ export default function AssessmentPage() {
                 tipId="coherence"
                 openTip={openTip}
                 onToggleTip={toggleTip}
-                value={restingMetrics?.coherence != null ? restingMetrics.coherence.toFixed(0) : '—'}
+                value={restingMetrics?.coherence != null ? restingMetrics.coherence.toFixed(0) : NOT_MEASURED}
                 unit="%"
                 note={CARD_NOTES.coherence}
                 band={{ metric: 'coherence', value: restingMetrics?.coherence ?? null, ageBand }}
@@ -2516,19 +2599,19 @@ export default function AssessmentPage() {
                 tipId="complexity"
                 openTip={openTip}
                 onToggleTip={toggleTip}
-                value={restingMetrics?.sampEn != null ? restingMetrics.sampEn.toFixed(2) : '—'}
+                value={restingMetrics?.sampEn != null ? restingMetrics.sampEn.toFixed(2) : NOT_MEASURED}
                 note={CARD_NOTES.complexity}
                 band={{ metric: 'complexity', value: restingMetrics?.sampEn ?? null, ageBand }}
               />
               <MetricCard
-                label="Resonance"
+                label={resonance.rate !== null ? 'Resonance' : 'Rated pace'}
                 tipId="resonance"
                 openTip={openTip}
                 onToggleTip={toggleTip}
-                value={resonance.rate.toFixed(1)}
+                value={shownPace !== null ? shownPace.toFixed(1) : NOT_MEASURED}
                 unit="br/min"
-                note={CARD_NOTES.resonance}
-                band={{ metric: 'resonance', value: resonance.rate, ageBand }}
+                note={resonance.rate !== null ? CARD_NOTES.resonance : RATED_PACE_NOTE}
+                band={{ metric: 'resonance', value: shownPace, ageBand }}
               />
             </div>
 

@@ -85,6 +85,7 @@ const rfSegments = RATES.map((rate, i) => ({
   rate,
   metrics: i === 4 ? null : metrics(40 + i * 5, 30 + i * 3, i === 2 ? null : 50 + i),
   rrCount: 100 + i,
+  cleanMs: 110000 + i * 100, // over 90 s of clean signal: every rate passes the time test
 }));
 const rfRR = RATES.map((_, i) => Array.from({ length: 600 + i }, (_, k) => 800 + (k % 7)));
 
@@ -93,7 +94,7 @@ function capacityInput(overrides = {}) {
     completionId: 'c-full-0001',
     restingMetrics: metrics(60, 45, 55),
     recoveryIndex: 72,
-    resonance: pickResonance(rfSegments),
+    resonance: pickResonance(rfSegments, 120000),
     restingRR: Array.from({ length: 2500 }, (_, k) => 790 + (k % 11)), // over the 2000 cap
     rfSegments,
     rfRR,
@@ -107,20 +108,41 @@ function capacityInput(overrides = {}) {
   };
 }
 
-test('full assessment: payload identical to the pre-Insight inline object', () => {
-  const input = capacityInput();
-  assert.deepStrictEqual(buildCapacityMessage(input), legacyCapacityMessage(input.completionId, input));
-});
-
-test('full assessment: identical with no resting metrics and a simulated strap too', () => {
-  const input = capacityInput({ restingMetrics: null, deviceMode: 'sim', phase: null });
-  assert.deepStrictEqual(buildCapacityMessage(input), legacyCapacityMessage(input.completionId, input));
-});
-
-// The frozen payload with the one rawData addition a Full sitting makes.
-function legacyWithSelfReport(input, rate) {
+// The frozen payload with the per-rate sufficiency the scored result now carries, and
+// nothing else changed.
+function legacyWithSufficiency(input) {
   const legacy = legacyCapacityMessage(input.completionId, input);
-  return { ...legacy, rawData: { ...legacy.rawData, self_report_pick: { rate } } };
+  const rf_results = legacy.rawData.rf_results.map((r, i) => ({ ...r, ...input.resonance.sufficiency[i] }));
+  return { ...legacy, rawData: { ...legacy.rawData, rf_results } };
+}
+
+test('full assessment: the pre-Insight inline object plus per-rate sufficiency, nothing else', () => {
+  const input = capacityInput();
+  assert.deepStrictEqual(buildCapacityMessage(input), legacyWithSufficiency(input));
+  assert.deepEqual(Object.keys(buildCapacityMessage(input).rawData.rf_results[0]),
+    ['rate', 'amplitude', 'coherence', 'rmssd', 'rr_count', 'resonance_score', 'sufficient', 'clean_ms']);
+  // control: every fixture rate passes the time test (index 4, with no metrics, passes it
+  // too but is never picked)
+  assert.deepEqual(buildCapacityMessage(input).rawData.rf_results.map((r) => r.sufficient), [true, true, true, true, true, true]);
+});
+
+test('full assessment: the same with no resting metrics and a simulated strap too', () => {
+  const input = capacityInput({ restingMetrics: null, deviceMode: 'sim', phase: null });
+  assert.deepStrictEqual(buildCapacityMessage(input), legacyWithSufficiency(input));
+});
+
+// The scored payload with the rawData additions a Full sitting makes: the self-report
+// pick, then the pick with its source (measured here, the fixture having a signal).
+function legacyWithSelfReport(input, rate) {
+  const legacy = legacyWithSufficiency(input);
+  return {
+    ...legacy,
+    rawData: {
+      ...legacy.rawData,
+      self_report_pick: { rate },
+      resonance_pick: { rate: input.resonance.rate, source: 'measured' },
+    },
+  };
 }
 
 test('full sitting: ONE message, the unchanged scored result plus the sweep, joined by session_id', () => {
@@ -176,7 +198,7 @@ test('full sitting with no ratings: self_report_pick is { rate: null }, the meas
 test('pace finder unchanged: no self_report_pick key (control)', () => {
   const msg = buildPaceFinderMessage({
     completionId: 'c-pf', sweep: buildSweepEnvelope(ratings, 'c-pf'), pick: selfReportPick(ratings),
-    rfSegments: [], rfRR: [], resonanceScores: [], deviceMode: 'none', rfSegmentMs: 90000, attempt: 1, phase: null,
+    rfSegments: [], rfRR: [], resonanceScores: [], rfSufficiency: [], deviceMode: 'none', rfSegmentMs: 90000, attempt: 1, phase: null,
   });
   assert.equal('self_report_pick' in msg.rawData, false);
   assert.deepEqual(msg.rawData.resonance_pick, { rate: 5.5, source: 'self_report' });
@@ -216,7 +238,7 @@ test('full sitting, skipped: exactly the frozen payload plus sweep (control)', (
 test('pace finder: ageBand only when answered, and never a context', () => {
   const base = {
     completionId: 'c-age', sweep: buildSweepEnvelope({}, 'c-age'), pick: selfReportPick({}),
-    rfSegments: [], rfRR: [], resonanceScores: [], deviceMode: 'none', rfSegmentMs: 90000, attempt: 1, phase: null,
+    rfSegments: [], rfRR: [], resonanceScores: [], rfSufficiency: [], deviceMode: 'none', rfSegmentMs: 90000, attempt: 1, phase: null,
   };
   const answered = buildPaceFinderMessage(base, ageFields(null, '30s', false));
   assert.equal(answered.ageBand, '30s');
@@ -242,7 +264,7 @@ const ratings = {
 
 test('pace finder with an armband: sweep present, pick from pickResonance, no scored result', () => {
   const completionId = 'c-pace-ble';
-  const resonance = pickResonance(rfSegments);
+  const resonance = pickResonance(rfSegments, 90000);
   const msg = buildPaceFinderMessage({
     completionId,
     sweep: buildSweepEnvelope(ratings, completionId),
@@ -250,6 +272,7 @@ test('pace finder with an armband: sweep present, pick from pickResonance, no sc
     rfSegments,
     rfRR,
     resonanceScores: resonance.scores,
+    rfSufficiency: resonance.sufficiency,
     deviceMode: 'ble',
     rfSegmentMs: 90000,
     attempt: 1,
@@ -278,6 +301,7 @@ test('pace finder without an armband: sweep present, pick labelled self-reported
     rfSegments: [],
     rfRR: [],
     resonanceScores: [],
+    rfSufficiency: [],
     deviceMode: 'none',
     rfSegmentMs: 90000,
     attempt: 1,
@@ -297,7 +321,7 @@ test('pace finder without an armband: sweep present, pick labelled self-reported
 test('pace finder: version travels as the string "1"', () => {
   const msg = buildPaceFinderMessage({
     completionId: 'c-v', sweep: buildSweepEnvelope({}, 'c-v'), pick: selfReportPick({}),
-    rfSegments: [], rfRR: [], resonanceScores: [], deviceMode: 'none', rfSegmentMs: 90000, attempt: 1, phase: null,
+    rfSegments: [], rfRR: [], resonanceScores: [], rfSufficiency: [], deviceMode: 'none', rfSegmentMs: 90000, attempt: 1, phase: null,
   });
   assert.equal(typeof msg.sweep.version, 'string');
   assert.ok(JSON.stringify(msg).includes('"version":"1"'));

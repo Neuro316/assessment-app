@@ -19,8 +19,9 @@ export interface HRVMetrics {
   lfHfRatio: number;
   lfNu: number;
   hfNu: number;
-  // Respiratory
-  breathRate: number;
+  // Respiratory. null on 30 beats or fewer: too short to count breaths. (Was a fixed
+  // 14, which a gapped resting block then reported as a measured breath rate.)
+  breathRate: number | null;
   // Nonlinear. null when the record is too short or too flat to compute: these
   // used to return fixed sentinels (1.5, 1.0) on thin data, which in any
   // correlation or transition analysis produce dense fake point masses
@@ -170,7 +171,7 @@ export function computeAllMetrics(rr: number[]): HRVMetrics | null {
   const lfNu = lfPower + hfPower > 0 ? (lfPower / (lfPower + hfPower)) * 100 : 50;
 
   // Breath rate estimate
-  let breathRate = 14;
+  let breathRate: number | null = null;
   if (rr.length > 30) {
     let zeroCrossings = 0;
     const detrended = rr.map(r => r - meanRR);
@@ -194,7 +195,7 @@ export function computeAllMetrics(rr: number[]): HRVMetrics | null {
     lfHfRatio: Math.round(lfHfRatio * 100) / 100,
     lfNu: Math.round(lfNu * 10) / 10,
     hfNu: Math.round((100 - lfNu) * 10) / 10,
-    breathRate: Math.round(breathRate * 10) / 10,
+    breathRate: breathRate === null ? null : Math.round(breathRate * 10) / 10,
     sampEn: sampleEntropy(rr),
     dfaA1: dfaAlpha1(rr),
     coherence: coherenceRatio(rr),

@@ -24,6 +24,8 @@ export interface SessionRFSegment {
   rate: number;
   metrics: HRVMetrics | null;
   rrCount: number;
+  // Clean signal time (resonance.ts cleanMs). Missing on drafts saved before it existed.
+  cleanMs?: number;
 }
 
 export interface SessionState {
