@@ -139,18 +139,23 @@ export function validateSweepEnvelope(env: unknown, completionId: string): strin
   return errors;
 }
 
+// The scales the self-report pick averages. Ruled by Cameron 2026-10-10: grounded,
+// focused and presence. Energy is recorded in the sweep like the others but carries
+// no weight in the pick.
+export const PICK_SCALES: readonly SweepScaleKey[] = ['grounded', 'focused', 'presence'];
+
 // The pick when there is no armband: the rate the person rated best, as SELF-REPORT.
 // It is never a measured resonance frequency and must never be presented as one.
 //
-// "Rated best" = the highest mean of that rate's non-blank answers across the four
-// scales. A tie goes to the slower rate (the first in ascending order). A rate with
-// every answer blank has no mean and cannot be picked. If no rate has an answer,
-// there is no pick (null).
+// "Rated best" = the highest mean of that rate's non-blank answers on PICK_SCALES
+// (energy excluded). A tie goes to the slower rate (the first in ascending order). A
+// rate with no non-blank answer on those scales has no mean and cannot be picked. If
+// no rate has one, there is no pick (null).
 export function selfReportPick(ratings: SweepRatings): { rate: number | null; source: 'self_report' } {
   let best: { rate: number; mean: number } | null = null;
   for (const rate of SWEEP_RATES) {
     const set = ratings[segmentForRate(rate)];
-    const values = SWEEP_SCALES.map((s) => set?.[s.key]).filter((v): v is number => typeof v === 'number');
+    const values = PICK_SCALES.map((k) => set?.[k]).filter((v): v is number => typeof v === 'number');
     if (!values.length) continue;
     const mean = values.reduce((a, b) => a + b, 0) / values.length;
     if (!best || mean > best.mean) best = { rate, mean };

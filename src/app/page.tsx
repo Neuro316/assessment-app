@@ -2189,7 +2189,7 @@ export default function AssessmentPage() {
                   can also measure how your heart responds at each pace.
                 </>
               ) : (
-                'You left every rating blank, so there is no pace to pick. That is fine: the breathing itself still counts.'
+                'None of the paces has a Grounded, Focused or Presence rating to compare, so there is no pace to pick. That is fine: the breathing itself still counts.'
               )}
             </p>
 
