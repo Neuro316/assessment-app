@@ -14,13 +14,18 @@
 // Without embedded=true the assessment does not render at all — see GateScreen.
 // Dev flag: ?fast=1 shortens every recording segment so the flow can be walked in ~2 min.
 //
-// Insight sitting: &mode=insight. The platform decides who gets one; this app only
-// runs it. No resting block: the resonance sweep alone, 90 s per rate, with the four
-// 1-to-5 scales before the sweep and after every rate, and the armband optional:
-//   connect (or continue without an armband) -> checklist -> rf intro
-//   -> ratings (pre) -> [rate -> ratings] x 6 -> rf done -> complete
-// The ratings travel as the `sweep` envelope on the completion message, per
-// docs/plans/instrument-envelope.md §K and §K.7 on Neuro316/npu-platform-v2 main.
+// The mode is chosen per sitting on the welcome screen, never by the launch URL (an
+// `&mode=insight` on the link is ignored). See src/lib/sitting-mode.ts:
+//   armband connected: "Full assessment" (default) or "Pace finder only"
+//   no armband: the pace finder on self-report, with no choice shown
+// Both rate the four 1-to-5 scales before the sweep and after every rate:
+//   full:        connect -> checklist -> resting intro -> resting -> resting done
+//                -> rf intro -> ratings (pre) -> [rate (2 min) -> ratings] x 6 -> rf done
+//   pace finder: connect -> checklist -> rf intro
+//                -> ratings (pre) -> [rate (90 s) -> ratings] x 6 -> rf done
+// The ratings travel as the `sweep` envelope (docs/plans/instrument-envelope.md §K
+// and §K.7 on Neuro316/npu-platform-v2 main): alongside the scored result in one
+// assessment-complete for the full assessment, alone for the pace finder.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -48,10 +53,17 @@ import BreathPacer from '@/components/BreathPacer';
 import { computeAllMetrics, type HRVMetrics } from '@/lib/hrv-metrics';
 import { pickResonance, type RFSegment } from '@/lib/resonance';
 import {
-  buildCapacityMessage,
-  buildInsightMessage,
+  buildFullMessage,
+  buildPaceFinderMessage,
   type ResonancePick,
 } from '@/lib/completion-message';
+import {
+  DEFAULT_CHOICE,
+  draftModeOf,
+  modeChoiceOffered,
+  sittingModeFor,
+  type SittingMode,
+} from '@/lib/sitting-mode';
 import {
   SWEEP_SCALES,
   SWEEP_MIN,
@@ -89,8 +101,8 @@ const C = {
 // ===== PROTOCOL =====
 const RESTING_MS = 5 * 60 * 1000;
 const RF_SEGMENT_MS = 2 * 60 * 1000;
-// An Insight sitting's sweep runs each rate for 90 s rather than 2 minutes.
-const INSIGHT_SEGMENT_MS = 90 * 1000;
+// The pace finder runs each rate for 90 s; the full assessment keeps 2 minutes.
+const PACE_FINDER_SEGMENT_MS = 90 * 1000;
 const RF_RATES = [4.5, 5.0, 5.5, 6.0, 6.5, 7.0];
 
 // The recorded voice track in public/Audio, in protocol order. `rate` is indexed
@@ -102,6 +114,7 @@ const AUDIO = {
   restingComplete: '4.mp3',
   rfIntro: '5.mp3',
   rate: ['6.mp3', '7.mp3', '8.mp3', '9.mp3', '10.mp3', '11.mp3'],
+  // Not played since every rate is followed by the ratings screen; kept with its file.
   rateComplete: '12.mp3',
   assessmentComplete: '13.mp3',
   disconnected: '14.mp3',
@@ -124,7 +137,7 @@ type Phase =
   | 'rf'
   | 'rf-done'
   | 'complete'
-  // Insight only: the four scales, before the sweep and after each rate.
+  // Both modes: the four scales, before the sweep and after each rate.
   | 'sweep-ratings';
 
 const ACTIVE_PHASES: Phase[] = [
@@ -796,8 +809,9 @@ export default function AssessmentPage() {
   const [assessmentNumber, setAssessmentNumber] = useState(1);
   const [journeyPhase, setJourneyPhase] = useState<string | null>(null);
   const [fastMode, setFastMode] = useState(false);
-  // An Insight sitting (&mode=insight): sweep only, ratings at every rate, armband optional.
-  const [insightMode, setInsightMode] = useState(false);
+  // The mode the person picked on the welcome screen. It only counts while an armband
+  // is connected; without one the sitting is the pace finder regardless.
+  const [chosenMode, setChosenMode] = useState<SittingMode>(DEFAULT_CHOICE);
   // Who the launch token says this is, once /api/verify-launch has vouched for it.
   // null without a valid token. Read by nothing yet.
   const [launchPersonId, setLaunchPersonId] = useState<string | null>(null);
@@ -805,7 +819,7 @@ export default function AssessmentPage() {
 
   // Device
   const [connState, setConnState] = useState<'idle' | 'connecting' | 'connected'>('idle');
-  // 'none' = an Insight sitting run without an armband: pacer and self-report only,
+  // 'none' = a sitting run without an armband: the pace finder on self-report only,
   // and no Bluetooth call is ever made.
   const [connMode, setConnMode] = useState<'ble' | 'sim' | 'none' | null>(null);
   const [connNotice, setConnNotice] = useState<{ text: string; tone: 'error' | 'muted' } | null>(null);
@@ -860,7 +874,7 @@ export default function AssessmentPage() {
   const [rfSegments, setRfSegments] = useState<RFSegment[]>([]);
   const [rfIndex, setRfIndex] = useState(0);
 
-  // Insight sweep ratings, by segment ('pre', 'rate_4.5' ...), and the segment being
+  // Sweep ratings, by segment ('pre', 'rate_4.5' ...), and the segment being
   // rated right now with its unsaved answers. A blank answer is null, never 0.
   const [sweepRatings, setSweepRatings] = useState<SweepRatings>({});
   const [ratingSegment, setRatingSegment] = useState<string>('pre');
@@ -888,9 +902,11 @@ export default function AssessmentPage() {
   }, []);
 
   const restingMs = fastMode ? 25_000 : RESTING_MS;
-  const rfSegmentMs = fastMode ? 15_000 : insightMode ? INSIGHT_SEGMENT_MS : RF_SEGMENT_MS;
-  // The Insight pick is measured only when there was a signal to measure.
-  const insightMeasured = connMode === 'ble' || connMode === 'sim';
+  // The mode this sitting runs, once an armband is connected or declined.
+  const paceFinder = sittingModeFor(connMode, chosenMode) === 'pace-finder';
+  const rfSegmentMs = fastMode ? 15_000 : paceFinder ? PACE_FINDER_SEGMENT_MS : RF_SEGMENT_MS;
+  // The pace-finder pick is measured only when there was a signal to measure.
+  const measured = connMode === 'ble' || connMode === 'sim';
 
   // ----- launch params -----
   useEffect(() => {
@@ -910,7 +926,8 @@ export default function AssessmentPage() {
     if (Number.isFinite(n) && n > 0) setAssessmentNumber(n);
     setJourneyPhase(params.get('phase'));
     if (params.get('fast') === '1') setFastMode(true);
-    if (params.get('mode') === 'insight') setInsightMode(true);
+    // ⚠ No `mode` param is read. The protocol is chosen per sitting on the welcome
+    // screen, so an `&mode=insight` on the launch link has no effect.
 
     // A signed launch token, when the link carries one. Verified on the server so the
     // secret never reaches the browser. It grants nothing yet: a rejected or missing
@@ -947,16 +964,15 @@ export default function AssessmentPage() {
 
     (async () => {
       const saved = await loadSession();
-      // A draft from the other kind of sitting is not offered: resuming a full
-      // assessment inside an Insight sitting (or the reverse) would mix two protocols.
-      const want = insightMode ? 'insight' : 'capacity';
-      if (!cancelled && saved && (saved.mode ?? 'capacity') === want) setResumePrompt(saved);
+      // The mode is not known at launch any more (it is chosen on the welcome screen),
+      // so any usable draft is offered, and resuming it restores the mode it was running.
+      if (!cancelled && saved) setResumePrompt(saved);
     })();
 
     return () => {
       cancelled = true;
     };
-  }, [embedded, insightMode]);
+  }, [embedded]);
 
   // handleDisconnect fires from a BLE event, so it reads the phase off a ref
   // rather than closing over stale state.
@@ -996,7 +1012,7 @@ export default function AssessmentPage() {
       name,
       assessmentNumber,
       connMode,
-      mode: insightMode ? 'insight' : 'capacity',
+      mode: paceFinder ? 'pace-finder' : 'full',
       sweepRatings,
       ratingSegment,
       restingRR: restingRRRef.current,
@@ -1028,7 +1044,7 @@ export default function AssessmentPage() {
       rfSegments,
       resumeInfo,
       currentElapsedMs,
-      insightMode,
+      paceFinder,
       sweepRatings,
       ratingSegment,
     ]
@@ -1302,44 +1318,26 @@ export default function AssessmentPage() {
       { rate: RF_RATES[index], metrics: computeAllMetrics(rr), rrCount: rr.length },
     ]);
 
-    if (insightMode) {
-      // Insight: every rate is followed by the four scales, so the next rate waits for
-      // the person rather than for the handoff cue. Stop collecting first: beats taken
-      // while they rate must not land in the rate that just ended.
-      collectorRef.current = null;
-      const segment = segmentForRate(RF_RATES[index]);
-      setRatingSegment(segment);
-      setDraftRatings(emptyRatingSet());
-      setPhase('sweep-ratings');
-      bell();
-      return;
-    }
+    // Both modes follow every rate with the four scales, so the next rate waits for the
+    // person rather than for a handoff cue. (The old rate-complete clip, which chained
+    // straight into the next rate, is no longer played.) Stop collecting first: beats
+    // taken while they rate must not land in the rate that just ended.
+    collectorRef.current = null;
+    setRatingSegment(segmentForRate(RF_RATES[index]));
+    setDraftRatings(emptyRatingSet());
+    setPhase('sweep-ratings');
+    bell();
+  }, [rfIndex]);
 
-    if (index < RF_RATES.length - 1) {
-      // Hold the next segment until the handoff cue finishes, so the recording
-      // does not start while the participant is still hearing the previous rate.
-      const gen = runGenerationRef.current;
-      playAudio(AUDIO.rateComplete).then(() => {
-        // A restart during the cue must not resurrect the run.
-        if (runGenerationRef.current !== gen) return;
-        startRFSegment(index + 1);
-      });
-    } else {
-      collectorRef.current = null;
-      setPhase('rf-done');
-      doubleBell();
-    }
-  }, [rfIndex, startRFSegment, insightMode]);
-
-  // Insight: open the four scales for the baseline, before any paced breathing.
-  const startInsightSweep = useCallback(() => {
+  // Open the four scales for the baseline, before any paced breathing.
+  const startSweep = useCallback(() => {
     setSweepRatings({});
     setRatingSegment('pre');
     setDraftRatings(emptyRatingSet());
     setPhase('sweep-ratings');
   }, []);
 
-  // Insight: keep this segment's answers (blank stays null) and move on. Every rate
+  // Keep this segment's answers (blank stays null) and move on. Every rate
   // runs: after 'pre' the sweep starts, after each rate the next one starts, and after
   // the last rate the sweep is done.
   const submitRatings = useCallback(() => {
@@ -1359,8 +1357,8 @@ export default function AssessmentPage() {
     }
   }, [ratingSegment, draftRatings, startRF, startRFSegment]);
 
-  // Insight without an armband: pacer and self-report only. Drops any strap that was
-  // connected; from here on nothing calls Bluetooth.
+  // No armband: the pace finder on self-report, pacer and ratings only. Drops any strap
+  // that was connected; from here on nothing calls Bluetooth.
   const continueWithoutArmband = useCallback(() => {
     disconnectRef.current?.();
     disconnectRef.current = null;
@@ -1420,6 +1418,7 @@ export default function AssessmentPage() {
     setSweepRatings({});
     setRatingSegment('pre');
     setDraftRatings(emptyRatingSet());
+    setChosenMode(DEFAULT_CHOICE);
     setPhase('connect');
   }, []);
 
@@ -1437,6 +1436,7 @@ export default function AssessmentPage() {
     setRatingSegment(saved.ratingSegment ?? 'pre');
     setDraftRatings({ ...emptyRatingSet(), ...(saved.sweepRatings?.[saved.ratingSegment ?? 'pre'] ?? {}) } as SweepRatingSet);
     if (saved.connMode === 'none') setConnMode('none');
+    setChosenMode(draftModeOf(saved.mode));
 
     restingRRRef.current = saved.restingRR || [];
     rfRRRef.current = RF_RATES.map((_, i) => saved.rfRR?.[i] ?? []);
@@ -1463,7 +1463,7 @@ export default function AssessmentPage() {
 
     // No armband after a page load, so reuse the reconnect overlay to get one back —
     // except at rf-done, which only needs the Save button and would otherwise trap
-    // the participant behind a demand they cannot dismiss. An Insight sitting run
+    // the participant behind a demand they cannot dismiss. A sitting run
     // without an armband never had one, so it is never asked for one either.
     setShowDisconnectOverlay(saved.phase !== 'rf-done' && saved.connMode !== 'none');
   }, []);
@@ -1506,7 +1506,7 @@ export default function AssessmentPage() {
   }, []);
 
   // Hands a completion to the University and closes the sitting. Shared by the full
-  // assessment and the Insight sweep so both deliver the same way.
+  // assessment and the pace finder so both deliver the same way.
   const deliver = useCallback(async (message: { type: string; completionId: string }, logShape: object) => {
     try {
       const isFramed = window.parent !== window;
@@ -1553,13 +1553,34 @@ export default function AssessmentPage() {
     }
   }, []);
 
-  // The full assessment. Its message is built by buildCapacityMessage, extracted unchanged
-  // from the object this function used to build inline, and it never carries `sweep`.
+  // The sweep envelope for this sitting, checked against the same rules the platform will
+  // apply, so a malformed sweep is caught on this screen, where it can still be fixed,
+  // rather than refused later. null (with the error shown) when it fails its check.
+  const packagedSweep = useCallback(
+    (completionId: string) => {
+      const sweep = buildSweepEnvelope(sweepRatings, completionId);
+      const problems = validateSweepEnvelope(sweep, completionId);
+      if (problems.length) {
+        console.error('[capacity-assessment] sweep failed its own check', problems);
+        setSaveError('Your ratings could not be packaged. Please tell the University team.');
+        setSaving(false);
+        return null;
+      }
+      return sweep;
+    },
+    [sweepRatings]
+  );
+
+  // The full assessment: its scored result, exactly as before, plus the sweep, in ONE
+  // assessment-complete message joined by sweep.context.session_id === completionId.
   const finalize = useCallback(async () => {
     setSaving(true);
     setSaveError(null);
-    const message = buildCapacityMessage({
-      completionId: sittingCompletionId(),
+    const completionId = sittingCompletionId();
+    const sweep = packagedSweep(completionId);
+    if (!sweep) return;
+    const message = buildFullMessage({
+      completionId,
       restingMetrics,
       recoveryIndex: recovery,
       resonance,
@@ -1572,13 +1593,16 @@ export default function AssessmentPage() {
       attempt: assessmentNumber,
       phase: journeyPhase,
       level,
-    });
+    }, sweep);
     await deliver(message, {
+      mode: 'full',
       metricKeys: Object.keys(message.metrics).length,
       recoveryIndex: message.metrics.recoveryIndex,
+      sweepItems: sweep.items.length,
     });
   }, [
     sittingCompletionId,
+    packagedSweep,
     deliver,
     assessmentNumber,
     journeyPhase,
@@ -1592,57 +1616,48 @@ export default function AssessmentPage() {
     level,
   ]);
 
-  // The Insight pick: measured when there was a signal, otherwise the rate the person
+  // The pace-finder pick: measured when there was a signal, otherwise the rate the person
   // rated best, labelled self-reported and never presented as a measured frequency.
-  const insightPick = useMemo<ResonancePick>(
+  const paceFinderPick = useMemo<ResonancePick>(
     () =>
-      insightMeasured
+      measured
         ? { rate: resonance.rate, source: 'measured' }
         : selfReportPick(sweepRatings),
-    [insightMeasured, resonance, sweepRatings]
+    [measured, resonance, sweepRatings]
   );
 
-  // An Insight sitting. No resting block, so no scored result: the message carries the
+  // The pace finder. No resting block, so no scored result: the message carries the
   // sweep envelope (§K.7) and the pick, and no `metrics`.
-  const finalizeInsight = useCallback(async () => {
+  const finalizePaceFinder = useCallback(async () => {
     setSaving(true);
     setSaveError(null);
     const completionId = sittingCompletionId();
-    const sweep = buildSweepEnvelope(sweepRatings, completionId);
+    const sweep = packagedSweep(completionId);
+    if (!sweep) return;
 
-    // Checked here against the same rules the platform will apply, so a malformed sweep
-    // is caught on this screen, where it can still be fixed, rather than refused later.
-    const problems = validateSweepEnvelope(sweep, completionId);
-    if (problems.length) {
-      console.error('[capacity-assessment] sweep failed its own check', problems);
-      setSaveError('Your ratings could not be packaged. Please tell the University team.');
-      setSaving(false);
-      return;
-    }
-
-    const message = buildInsightMessage({
+    const message = buildPaceFinderMessage({
       completionId,
       sweep,
-      pick: insightPick,
-      rfSegments: insightMeasured ? rfSegments : [],
-      rfRR: insightMeasured ? rfRRRef.current : [],
-      resonanceScores: insightMeasured ? resonance.scores : [],
+      pick: paceFinderPick,
+      rfSegments: measured ? rfSegments : [],
+      rfRR: measured ? rfRRRef.current : [],
+      resonanceScores: measured ? resonance.scores : [],
       deviceMode: connMode,
       rfSegmentMs,
       attempt: assessmentNumber,
       phase: journeyPhase,
     });
     await deliver(message, {
-      mode: 'insight',
+      mode: 'pace-finder',
       sweepItems: sweep.items.length,
-      pickSource: insightPick.source,
+      pickSource: paceFinderPick.source,
     });
   }, [
     sittingCompletionId,
+    packagedSweep,
     deliver,
-    sweepRatings,
-    insightPick,
-    insightMeasured,
+    paceFinderPick,
+    measured,
     rfSegments,
     resonance,
     connMode,
@@ -1658,8 +1673,9 @@ export default function AssessmentPage() {
   if (!embedded) return <GateScreen />;
 
   const showAbort = ACTIVE_PHASES.includes(phase);
-  // An Insight sitting may begin without an armband; the full assessment may not.
-  const canStart = connState === 'connected' || (insightMode && connMode === 'none');
+  // Begin once an armband is connected (a mode is then chosen) or declined (the pace
+  // finder on self-report).
+  const canStart = connState === 'connected' || connMode === 'none';
   const allChecked = checks.every(Boolean);
 
   return (
@@ -1714,9 +1730,12 @@ export default function AssessmentPage() {
               {name ? `Welcome, ${name}` : 'Welcome'}
             </h1>
             <p className="text-sm leading-relaxed mb-6" style={{ opacity: 0.72 }}>
-              {insightMode
-                ? 'This finds the breathing pace that suits you best. You will breathe along with a circle at six different rates, a minute and a half each, and rate how you feel before you start and after every rate. The armband is optional. Find somewhere you will not be interrupted.'
-                : 'This is a twenty minute measurement of how your nervous system is currently allocating its resources. You will rest quietly for five minutes, then breathe along with a circle at six different rates. Find somewhere you will not be interrupted.'}
+              With your armband connected you can choose the full assessment, about twenty-five
+              minutes: five minutes of quiet rest, then breathing along with a circle at six
+              different paces. Or choose the pace finder on its own, about twelve minutes of the
+              breathing only. Either way you rate how you feel before the breathing and after every
+              pace. Without an armband, the pace finder runs on your ratings alone. Find somewhere you
+              will not be interrupted.
             </p>
 
             <div className="space-y-3 mb-6">
@@ -1760,26 +1779,24 @@ export default function AssessmentPage() {
                 {connMode === 'sim' && connState === 'connected' ? <Check /> : null}
               </button>
 
-              {insightMode ? (
-                <button
-                  onClick={continueWithoutArmband}
-                  disabled={connState === 'connecting'}
-                  className="w-full rounded-xl px-5 py-4 text-sm font-medium border disabled:opacity-40 text-left flex items-center justify-between gap-3"
-                  style={{
-                    borderColor: connMode === 'none' ? C.blue : C.mist,
-                    color: C.charcoal,
-                    background: connMode === 'none' ? `${C.blue}0f` : '#fff',
-                  }}
-                >
-                  <span>
-                    Continue without an armband
-                    <span className="block text-xs font-normal mt-0.5" style={{ opacity: 0.6 }}>
-                      Breathe with the circle and rate how you feel; nothing is measured
-                    </span>
+              <button
+                onClick={continueWithoutArmband}
+                disabled={connState === 'connecting'}
+                className="w-full rounded-xl px-5 py-4 text-sm font-medium border disabled:opacity-40 text-left flex items-center justify-between gap-3"
+                style={{
+                  borderColor: connMode === 'none' ? C.blue : C.mist,
+                  color: C.charcoal,
+                  background: connMode === 'none' ? `${C.blue}0f` : '#fff',
+                }}
+              >
+                <span>
+                  Continue without an armband
+                  <span className="block text-xs font-normal mt-0.5" style={{ opacity: 0.6 }}>
+                    The pace finder on your own ratings; nothing is measured
                   </span>
-                  {connMode === 'none' ? <Check /> : null}
-                </button>
-              ) : null}
+                </span>
+                {connMode === 'none' ? <Check /> : null}
+              </button>
             </div>
 
             {connState === 'connecting' ? (
@@ -1795,6 +1812,48 @@ export default function AssessmentPage() {
               >
                 <PulseDot hr={hr || 60} />
                 {hr > 0 ? `Signal received — ${hr} bpm` : 'Connected, waiting for the first beats…'}
+              </div>
+            ) : null}
+
+            {/* The mode is chosen here, per sitting, and only when there is a signal to
+                measure. Without an armband there is no choice: the pace finder runs. */}
+            {connState === 'connected' && modeChoiceOffered(connMode) ? (
+              <div className="mb-6" role="radiogroup" aria-label="What would you like to do?">
+                <p className="text-sm font-medium mb-2" style={{ color: C.indigo }}>
+                  What would you like to do?
+                </p>
+                <div className="space-y-2">
+                  {(
+                    [
+                      ['full', 'Full assessment', 'Five minutes of quiet rest, then the breathing paces'],
+                      ['pace-finder', 'Pace finder only', 'The breathing paces on their own'],
+                    ] as const
+                  ).map(([mode, label, detail]) => {
+                    const selected = chosenMode === mode;
+                    return (
+                      <button
+                        key={mode}
+                        role="radio"
+                        aria-checked={selected}
+                        onClick={() => setChosenMode(mode)}
+                        className="w-full rounded-xl px-4 py-3 text-sm border text-left flex items-center justify-between gap-3"
+                        style={{
+                          borderColor: selected ? C.blue : C.mist,
+                          background: selected ? `${C.blue}0f` : '#fff',
+                          color: C.indigo,
+                        }}
+                      >
+                        <span>
+                          <span className="font-semibold">{label}</span>
+                          <span className="block text-xs mt-0.5" style={{ opacity: 0.6, color: C.charcoal }}>
+                            {detail}
+                          </span>
+                        </span>
+                        {selected ? <Check /> : null}
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
             ) : null}
 
@@ -1874,8 +1933,8 @@ export default function AssessmentPage() {
 
             <PrimaryButton
               onClick={() => {
-                // Insight has no resting block: straight to the breathing sweep.
-                if (insightMode) {
+                // The pace finder has no resting block: straight to the breathing sweep.
+                if (paceFinder) {
                   setPhase('rf-intro');
                   playAudio(AUDIO.rfIntro);
                 } else {
@@ -2023,9 +2082,9 @@ export default function AssessmentPage() {
               Breathing measurement
             </h2>
             <p className="text-sm leading-relaxed mb-4" style={{ opacity: 0.72 }}>
-              {insightMode
-                ? 'Every nervous system has a breathing pace that suits it best. You will try six, a minute and a half each, from slow to slightly faster. First you will rate how you feel right now, and again after every rate.'
-                : 'Every nervous system has one breathing rate where the heart and the breath swing together most strongly. Finding yours takes twelve minutes: six rates, two minutes each, from slow to slightly faster.'}
+              {paceFinder
+                ? 'Every nervous system has a breathing pace that suits it best. You will try six, a minute and a half each, from slow to slightly faster. First you will rate how you feel right now, and again after every pace.'
+                : 'Every nervous system has one breathing rate where the heart and the breath swing together most strongly. You will try six, two minutes each, from slow to slightly faster. First you will rate how you feel right now, and again after every pace.'}
             </p>
             <p className="text-sm leading-relaxed mb-7" style={{ opacity: 0.72 }}>
               Keep your eyes open and follow the circle — inhale as it grows, exhale as it settles.
@@ -2050,11 +2109,7 @@ export default function AssessmentPage() {
             ) : null}
             <PrimaryButton
               onClick={() =>
-                resumeInfo?.section === 'rf'
-                  ? startRFSegment(rfIndex, resumeInfo.carryMs)
-                  : insightMode
-                    ? startInsightSweep()
-                    : startRF()
+                resumeInfo?.section === 'rf' ? startRFSegment(rfIndex, resumeInfo.carryMs) : startSweep()
               }
             >
               {resumeInfo?.section === 'rf'
@@ -2108,7 +2163,7 @@ export default function AssessmentPage() {
           </div>
         ) : null}
 
-        {/* ===== INSIGHT: THE FOUR SCALES ===== */}
+        {/* ===== THE FOUR SCALES (both modes) ===== */}
         {phase === 'sweep-ratings' ? (
           <Panel>
             <p
@@ -2170,20 +2225,20 @@ export default function AssessmentPage() {
           </Panel>
         ) : null}
 
-        {/* ===== 8a. RF DONE, INSIGHT WITHOUT AN ARMBAND ===== */}
+        {/* ===== 8a. RF DONE, PACE FINDER WITHOUT AN ARMBAND ===== */}
         {/* Nothing was measured, so nothing here may read as a measurement: the pick is the
             rate the person rated best, and it says so. */}
-        {phase === 'rf-done' && insightMode && !insightMeasured ? (
+        {phase === 'rf-done' && paceFinder && !measured ? (
           <Panel>
             <h2 className="text-xl font-semibold mb-2" style={{ color: C.indigo }}>
               The pace you rated best
             </h2>
             <p className="text-sm leading-relaxed mb-6" style={{ opacity: 0.72 }}>
-              {insightPick.rate !== null ? (
+              {paceFinderPick.rate !== null ? (
                 <>
                   You rated{' '}
                   <strong style={{ color: C.blue }}>
-                    {insightPick.rate.toFixed(1)} breaths per minute
+                    {paceFinderPick.rate.toFixed(1)} breaths per minute
                   </strong>{' '}
                   highest. This is your own rating, not a measurement: with the armband, the sweep
                   can also measure how your heart responds at each pace.
@@ -2199,14 +2254,14 @@ export default function AssessmentPage() {
               </p>
             ) : null}
 
-            <PrimaryButton onClick={finalizeInsight} disabled={saving}>
+            <PrimaryButton onClick={finalizePaceFinder} disabled={saving}>
               {saving ? 'Saving…' : 'Save my ratings'}
             </PrimaryButton>
           </Panel>
         ) : null}
 
         {/* ===== 8. RF DONE ===== */}
-        {phase === 'rf-done' && !(insightMode && !insightMeasured) ? (
+        {phase === 'rf-done' && !(paceFinder && !measured) ? (
           <div className="w-full max-w-xl mx-auto" style={{ animation: 'fade-in 0.5s ease-out' }}>
             <div className="rounded-2xl bg-white p-7 border" style={{ borderColor: C.mist }}>
               <h2 className="text-xl font-semibold mb-2" style={{ color: C.indigo }}>
@@ -2275,19 +2330,19 @@ export default function AssessmentPage() {
                 </p>
               ) : null}
 
-              <PrimaryButton onClick={insightMode ? finalizeInsight : finalize} disabled={saving}>
+              <PrimaryButton onClick={paceFinder ? finalizePaceFinder : finalize} disabled={saving}>
                 {saving ? 'Saving…' : 'Save my assessment'}
               </PrimaryButton>
             </div>
           </div>
         ) : null}
 
-        {/* ===== 9a. COMPLETE, INSIGHT ===== */}
+        {/* ===== 9a. COMPLETE, PACE FINDER ===== */}
         {/* No resting block, so none of the full assessment's resting figures exist to show. */}
-        {phase === 'complete' && insightMode ? (
+        {phase === 'complete' && paceFinder ? (
           <Panel>
             <h2 className="text-2xl font-semibold mb-2" style={{ color: C.indigo }}>
-              Sweep complete
+              Pace finder complete
             </h2>
             {name.trim() ? (
               <p className="text-sm mb-4" style={{ opacity: 0.6 }}>
@@ -2295,17 +2350,17 @@ export default function AssessmentPage() {
               </p>
             ) : null}
             <p className="text-sm leading-relaxed" style={{ opacity: 0.72 }}>
-              {insightPick.rate === null
+              {paceFinderPick.rate === null
                 ? 'Your ratings have been sent to the University.'
-                : insightPick.source === 'measured'
-                  ? `Your heart responded most strongly at ${insightPick.rate.toFixed(1)} breaths per minute. Your results and ratings have been sent to the University.`
-                  : `You rated ${insightPick.rate.toFixed(1)} breaths per minute highest. Your ratings have been sent to the University.`}
+                : paceFinderPick.source === 'measured'
+                  ? `Your heart responded most strongly at ${paceFinderPick.rate.toFixed(1)} breaths per minute. Your results and ratings have been sent to the University.`
+                  : `You rated ${paceFinderPick.rate.toFixed(1)} breaths per minute highest. Your ratings have been sent to the University.`}
             </p>
           </Panel>
         ) : null}
 
         {/* ===== 9. COMPLETE ===== */}
-        {phase === 'complete' && !insightMode ? (
+        {phase === 'complete' && !paceFinder ? (
           <div className="w-full max-w-2xl mx-auto" style={{ animation: 'fade-in 0.5s ease-out' }}>
             <div className="flex flex-col items-center text-center mb-8">
               <span

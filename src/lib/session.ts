@@ -40,11 +40,11 @@ export interface SessionState {
   assessmentNumber: number;
   connMode: 'ble' | 'sim' | 'none' | null;
 
-  // Which kind of sitting this draft belongs to. Absent on drafts saved before Insight
-  // existed, which were all full assessments. A draft is only ever offered back to the
-  // same kind of sitting.
-  mode?: 'capacity' | 'insight';
-  // Insight only: ratings given so far, by segment, and the segment being rated.
+  // Which protocol this draft's sitting was running: 'full' or 'pace-finder'.
+  // Drafts saved before the per-sitting choice used 'capacity' and 'insight'; a draft
+  // with no mode was a full assessment. Read through draftModeOf (sitting-mode.ts).
+  mode?: 'full' | 'pace-finder' | 'capacity' | 'insight';
+  // The sweep ratings given so far, by segment, and the segment being rated.
   sweepRatings?: Partial<Record<string, Partial<Record<string, number | null>>>>;
   ratingSegment?: string;
 

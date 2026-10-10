@@ -2,13 +2,15 @@
 // What the assessment hands the University when a sitting ends, over the existing
 // origin-checked `assessment-complete` message.
 //
-// buildCapacityMessage is the full assessment's message, extracted UNCHANGED from
-// the inline object that used to live in page.tsx's finalize(). It never carries a
-// `sweep` key: on a Capacity sitting the key is ABSENT, not null.
+// buildCapacityMessage is the full assessment's scored result, extracted UNCHANGED
+// from the inline object that used to live in page.tsx's finalize().
 //
-// buildInsightMessage is the Insight sitting's message. Per §K.7 it carries the
-// sweep envelope under `sweep`, with context.session_id equal to completionId.
-// Insight has no resting block, so it carries NO `metrics` (no scored result).
+// buildFullMessage is what a full-assessment sitting sends: that scored result plus
+// the sweep envelope under `sweep`, in ONE assessment-complete message, joined by
+// sweep.context.session_id === completionId (§K.7: the platform stores two rows).
+//
+// buildPaceFinderMessage is what a pace-finder sitting sends: the sweep alone, with
+// NO `metrics`, because the pace finder has no resting block and so no scored result.
 //
 // Pure: no React, no browser APIs, no runtime imports.
 
@@ -99,13 +101,18 @@ export function buildCapacityMessage(input: CapacityMessageInput) {
   };
 }
 
-// The Insight pick, with where it came from. A self-reported pick is the rate the
+// A full-assessment sitting: the scored result exactly as before, plus the sweep.
+export function buildFullMessage(input: CapacityMessageInput, sweep: SweepEnvelope) {
+  return { ...buildCapacityMessage(input), sweep };
+}
+
+// The pace-finder pick, with where it came from. A self-reported pick is the rate the
 // person rated best, and is NEVER a measured resonance frequency.
 export type ResonancePick =
   | { rate: number; source: 'measured' }
   | { rate: number | null; source: 'self_report' };
 
-export interface InsightMessageInput {
+export interface PaceFinderMessageInput {
   completionId: string;
   sweep: SweepEnvelope;
   pick: ResonancePick;
@@ -119,13 +126,13 @@ export interface InsightMessageInput {
   phase: string | null;
 }
 
-export function buildInsightMessage(input: InsightMessageInput) {
+export function buildPaceFinderMessage(input: PaceFinderMessageInput) {
   const measured = input.pick.source === 'measured';
   return {
     type: COMPLETE_MESSAGE,
     completionId: input.completionId,
     rawData: {
-      mode: 'insight' as const,
+      mode: 'pace-finder' as const,
       // ⚠ Self-report and measurement are kept apart by name. `resonance_freq`, which the
       // full assessment uses for the measured rate, is set ONLY when the pick was measured.
       resonance_pick: input.pick,

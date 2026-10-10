@@ -1,12 +1,18 @@
 // ===== COMPLETION MESSAGE TESTS =====
-// The full assessment's message must be exactly what it was before Insight existed,
-// with no `sweep` key at all. The Insight message carries the sweep (§K.7), no
-// scored result, and keeps a measured pick and a self-reported pick apart by name.
+// The full assessment's scored result must be exactly what it was before the sweep
+// existed. A full-assessment sitting sends that result PLUS the sweep in one
+// assessment-complete, joined by session_id. A pace-finder sitting sends the sweep
+// alone, with no scored result, and keeps a measured pick and a self-reported pick
+// apart by name.
 
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { buildCapacityMessage, buildInsightMessage } from '../src/lib/completion-message.ts';
+import {
+  buildCapacityMessage,
+  buildFullMessage,
+  buildPaceFinderMessage,
+} from '../src/lib/completion-message.ts';
 import { pickResonance } from '../src/lib/resonance.ts';
 import { buildSweepEnvelope, selfReportPick } from '../src/lib/insight-sweep.ts';
 
@@ -110,10 +116,21 @@ test('full assessment: identical with no resting metrics and a simulated strap t
   assert.deepStrictEqual(buildCapacityMessage(input), legacyCapacityMessage(input.completionId, input));
 });
 
-test('full assessment: the sweep key is ABSENT, not null', () => {
-  const msg = buildCapacityMessage(capacityInput());
-  assert.equal('sweep' in msg, false);
-  assert.equal(JSON.stringify(msg).includes('"sweep"'), false);
+test('full sitting: ONE message, the unchanged scored result plus the sweep, joined by session_id', () => {
+  const input = capacityInput();
+  const sweep = buildSweepEnvelope(ratings, input.completionId);
+  const msg = buildFullMessage(input, sweep);
+  // The scored result is exactly the old payload; the only addition is `sweep`.
+  assert.deepStrictEqual(msg, { ...legacyCapacityMessage(input.completionId, input), sweep });
+  assert.deepEqual(Object.keys(msg), ['type', 'completionId', 'metrics', 'rawData', 'sweep']);
+  assert.equal(msg.type, 'assessment-complete');
+  assert.equal(msg.sweep.context.session_id, msg.completionId);
+  assert.equal(msg.sweep.items.length, 28);
+});
+
+test('full sitting: the scored result alone still carries no sweep (control)', () => {
+  // buildCapacityMessage is the scored half; the sweep is added only by buildFullMessage.
+  assert.equal('sweep' in buildCapacityMessage(capacityInput()), false);
 });
 
 test('full assessment: caps still apply (2000 resting, 500 per rate)', () => {
@@ -122,7 +139,7 @@ test('full assessment: caps still apply (2000 resting, 500 per rate)', () => {
   assert.ok(msg.rawData.rf_rr_per_rate.every((rr) => rr.length === 500));
 });
 
-// ----- Insight -----
+// ----- the pace finder (the sweep alone) -----
 
 const ratings = {
   pre: { grounded: 2, focused: 3, energy: 2, presence: 3 },
@@ -130,10 +147,10 @@ const ratings = {
   'rate_6': { grounded: null, focused: 4, energy: null, presence: null },
 };
 
-test('Insight with an armband: sweep present, pick from pickResonance, no scored result', () => {
-  const completionId = 'c-insight-ble';
+test('pace finder with an armband: sweep present, pick from pickResonance, no scored result', () => {
+  const completionId = 'c-pace-ble';
   const resonance = pickResonance(rfSegments);
-  const msg = buildInsightMessage({
+  const msg = buildPaceFinderMessage({
     completionId,
     sweep: buildSweepEnvelope(ratings, completionId),
     pick: { rate: resonance.rate, source: 'measured' },
@@ -148,6 +165,7 @@ test('Insight with an armband: sweep present, pick from pickResonance, no scored
   assert.equal(msg.type, 'assessment-complete');
   assert.equal(msg.completionId, completionId);
   assert.equal('metrics' in msg, false, 'no scored result');
+  assert.equal(msg.rawData.mode, 'pace-finder');
   assert.equal(msg.sweep.instrument_id, 'insight-sweep');
   assert.equal(msg.sweep.items.length, 28);
   assert.equal(msg.sweep.context.session_id, completionId);
@@ -157,10 +175,10 @@ test('Insight with an armband: sweep present, pick from pickResonance, no scored
   assert.equal(msg.rawData.recording_duration_ms, 6 * 90000);
 });
 
-test('Insight without an armband: sweep present, pick labelled self-reported, nothing measured', () => {
-  const completionId = 'c-insight-none';
+test('pace finder without an armband: sweep present, pick labelled self-reported, nothing measured', () => {
+  const completionId = 'c-pace-none';
   const pick = selfReportPick(ratings);
-  const msg = buildInsightMessage({
+  const msg = buildPaceFinderMessage({
     completionId,
     sweep: buildSweepEnvelope(ratings, completionId),
     pick,
@@ -183,8 +201,8 @@ test('Insight without an armband: sweep present, pick labelled self-reported, no
   assert.equal(msg.rawData.recording_duration_ms, 0);
 });
 
-test('Insight: version travels as the string "1"', () => {
-  const msg = buildInsightMessage({
+test('pace finder: version travels as the string "1"', () => {
+  const msg = buildPaceFinderMessage({
     completionId: 'c-v', sweep: buildSweepEnvelope({}, 'c-v'), pick: selfReportPick({}),
     rfSegments: [], rfRR: [], resonanceScores: [], deviceMode: 'none', rfSegmentMs: 90000, attempt: 1, phase: null,
   });
