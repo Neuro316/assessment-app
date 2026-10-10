@@ -13,6 +13,8 @@
 // Launch params (URL): ?embedded=true&name=<participant>&attempt=<n>&phase=<pre|post>
 // Without embedded=true the assessment does not render at all — see GateScreen.
 // Dev flag: ?fast=1 shortens every recording segment so the flow can be walked in ~2 min.
+// Test flag: ?sim=1 offers "Use simulation" (a fake armband). Without it, it is never
+// offered, on the welcome screen or the disconnect screen.
 //
 // The mode is chosen per sitting on the welcome screen, never by the launch URL (an
 // `&mode=insight` on the link is ignored). See src/lib/sitting-mode.ts:
@@ -57,6 +59,7 @@ import {
   buildPaceFinderMessage,
   type ResonancePick,
 } from '@/lib/completion-message';
+import { simulationEnabled } from '@/lib/launch-flags';
 import {
   DEFAULT_CHOICE,
   draftModeOf,
@@ -380,7 +383,8 @@ function DisconnectOverlay({
   reconnecting: boolean;
   error: string | null;
   onReconnect: () => void;
-  onSimulate: () => void;
+  // Only offered on a test launch (&sim=1); null on a real sitting.
+  onSimulate: (() => void) | null;
 }) {
   return (
     <div
@@ -447,14 +451,16 @@ function DisconnectOverlay({
         >
           {reconnecting ? 'Reconnecting…' : 'Reconnect'}
         </button>
-        <button
-          onClick={onSimulate}
-          disabled={reconnecting}
-          className="w-full mt-3 text-xs font-medium underline underline-offset-4 disabled:opacity-40"
-          style={{ color: C.charcoal, opacity: 0.55 }}
-        >
-          Use simulation instead
-        </button>
+        {onSimulate ? (
+          <button
+            onClick={onSimulate}
+            disabled={reconnecting}
+            className="w-full mt-3 text-xs font-medium underline underline-offset-4 disabled:opacity-40"
+            style={{ color: C.charcoal, opacity: 0.55 }}
+          >
+            Use simulation instead
+          </button>
+        ) : null}
       </div>
     </div>
   );
@@ -812,6 +818,8 @@ export default function AssessmentPage() {
   // The mode the person picked on the welcome screen. It only counts while an armband
   // is connected; without one the sitting is the pace finder regardless.
   const [chosenMode, setChosenMode] = useState<SittingMode>(DEFAULT_CHOICE);
+  // "Use simulation" is offered only on a test launch (&sim=1); see launch-flags.ts.
+  const [simAllowed, setSimAllowed] = useState(false);
   // Who the launch token says this is, once /api/verify-launch has vouched for it.
   // null without a valid token. Read by nothing yet.
   const [launchPersonId, setLaunchPersonId] = useState<string | null>(null);
@@ -926,6 +934,7 @@ export default function AssessmentPage() {
     if (Number.isFinite(n) && n > 0) setAssessmentNumber(n);
     setJourneyPhase(params.get('phase'));
     if (params.get('fast') === '1') setFastMode(true);
+    setSimAllowed(simulationEnabled(params));
     // ⚠ No `mode` param is read. The protocol is chosen per sitting on the welcome
     // screen, so an `&mode=insight` on the launch link has no effect.
 
@@ -1760,24 +1769,27 @@ export default function AssessmentPage() {
                 {connMode === 'ble' && connState === 'connected' ? <Check /> : null}
               </button>
 
-              <button
-                onClick={() => connectDevice('sim')}
-                disabled={connState === 'connecting'}
-                className="w-full rounded-xl px-5 py-4 text-sm font-medium border disabled:opacity-40 text-left flex items-center justify-between gap-3"
-                style={{
-                  borderColor: connMode === 'sim' ? C.blue : C.mist,
-                  color: C.charcoal,
-                  background: connMode === 'sim' ? `${C.blue}0f` : '#fff',
-                }}
-              >
-                <span>
-                  Use simulation
-                  <span className="block text-xs font-normal mt-0.5" style={{ opacity: 0.6 }}>
-                    Walk through the assessment without an armband
+              {/* Test launches only (&sim=1). A real sitting is never offered made-up heartbeats. */}
+              {simAllowed ? (
+                <button
+                  onClick={() => connectDevice('sim')}
+                  disabled={connState === 'connecting'}
+                  className="w-full rounded-xl px-5 py-4 text-sm font-medium border disabled:opacity-40 text-left flex items-center justify-between gap-3"
+                  style={{
+                    borderColor: connMode === 'sim' ? C.blue : C.mist,
+                    color: C.charcoal,
+                    background: connMode === 'sim' ? `${C.blue}0f` : '#fff',
+                  }}
+                >
+                  <span>
+                    Use simulation
+                    <span className="block text-xs font-normal mt-0.5" style={{ opacity: 0.6 }}>
+                      Test only: a simulated armband
+                    </span>
                   </span>
-                </span>
-                {connMode === 'sim' && connState === 'connected' ? <Check /> : null}
-              </button>
+                  {connMode === 'sim' && connState === 'connected' ? <Check /> : null}
+                </button>
+              ) : null}
 
               <button
                 onClick={continueWithoutArmband}
@@ -2495,7 +2507,7 @@ export default function AssessmentPage() {
           reconnecting={reconnecting}
           error={reconnectError}
           onReconnect={reconnect}
-          onSimulate={reconnectSimulated}
+          onSimulate={simAllowed ? reconnectSimulated : null}
         />
       ) : null}
 
