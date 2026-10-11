@@ -267,12 +267,6 @@ export interface PracticeSamplesSummary {
   disconnects: number;
 }
 
-// One self-paced hold, as it actually happened.
-//   round    — the round it belonged to, or null outside a rounds() group
-//   heldMs   — how long it lasted
-//   endedBy  — 'person' when they released it; 'safety-cap' when the backstop did;
-//              'abandoned' when the session ended early while the hold was still
-//              open (heldMs is then the time held up to that moment)
 // What the record says about the strap: 'none' when no beat was recorded, whatever
 // was connected; otherwise 'sim' for the simulated strap and 'ble' for the HW9.
 export function strapModeFor(rrCount: number, simulated: boolean): PracticeSamplesSummary['strapMode'] {
@@ -280,6 +274,12 @@ export function strapModeFor(rrCount: number, simulated: boolean): PracticeSampl
   return simulated ? 'sim' : 'ble';
 }
 
+// One self-paced hold, as it actually happened.
+//   round    — the round it belonged to, or null outside a rounds() group
+//   heldMs   — how long it lasted
+//   endedBy  — 'person' when they released it; 'safety-cap' when the backstop did;
+//              'abandoned' when the session ended early while the hold was still
+//              open (heldMs is then the time held up to that moment)
 export interface PracticeHoldRecord {
   round: number | null;
   heldMs: number;
