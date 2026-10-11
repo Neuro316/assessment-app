@@ -48,7 +48,9 @@ export interface CapacityMessageInput {
   rfSegmentMs: number;
   attempt: number;
   phase: string | null;
-  level: { key: string; label: string };
+  // null when the resting block produced no metrics; capacity_level and capacity_label
+  // are then null, never a level read from nothing.
+  level: { key: string; label: string } | null;
 }
 
 // Per rate: whether its window held enough clean signal to be measured, and how much
@@ -112,8 +114,8 @@ export function buildCapacityMessage(input: CapacityMessageInput) {
       // the result with the launch it came from.
       attempt: input.attempt,
       phase: input.phase,
-      capacity_level: input.level.key,
-      capacity_label: input.level.label,
+      capacity_level: input.level?.key ?? null,
+      capacity_label: input.level?.label ?? null,
     },
   };
 }

@@ -186,6 +186,16 @@ interface CapacityLevel {
   description: string;
 }
 
+// Shown on the result screen when the resting block produced no metrics. Display
+// only: the message carries null, never this.
+const UNMEASURED_LEVEL: CapacityLevel = {
+  key: 'not-measured',
+  label: 'Capacity level not measured',
+  color: '#8A97A6',
+  description:
+    'Too little armband signal reached the resting measurement to read how your system is allocating its resources, so no level is shown. Your breathing paces are shown above.',
+};
+
 function capacityLevel(rmssd: number): CapacityLevel {
   if (rmssd >= 50) {
     return {
@@ -1516,7 +1526,11 @@ export default function AssessmentPage() {
     () => (resonance.rate !== null ? resonance.rate : selfReportPick(sweepRatings).rate),
     [resonance, sweepRatings]
   );
-  const level = useMemo(() => capacityLevel(restingMetrics?.rmssd ?? 0), [restingMetrics]);
+  // null when the resting block produced no metrics: no level is read from nothing. The
+  // message then carries capacity_level and capacity_label null, and the result screen
+  // shows UNMEASURED_LEVEL in place of a level.
+  const level = useMemo(() => (restingMetrics ? capacityLevel(restingMetrics.rmssd) : null), [restingMetrics]);
+  const shownLevel = level ?? UNMEASURED_LEVEL;
   const recovery = useMemo(() => recoveryIndex(restingMetrics?.rmssd ?? 0), [restingMetrics]);
 
   const chartData = useMemo(
@@ -2529,7 +2543,7 @@ export default function AssessmentPage() {
                 onToggleTip={toggleTip}
                 value={restingMetrics ? String(recovery) : NOT_MEASURED}
                 unit="/ 100"
-                accent={level.color}
+                accent={shownLevel.color}
                 note={CARD_NOTES.recovery}
                 band={{ metric: 'recovery', value: restingMetrics ? recovery : null, ageBand }}
               />
@@ -2584,15 +2598,19 @@ export default function AssessmentPage() {
               />
             </div>
 
-            <div className="rounded-2xl p-7 mb-8 border bg-white" style={{ borderColor: `${level.color}55` }}>
+            <div
+              className="rounded-2xl p-7 mb-8 border bg-white"
+              style={{ borderColor: `${shownLevel.color}55` }}
+              data-level={shownLevel.key}
+            >
               <div className="flex items-center gap-3 mb-3">
-                <span className="rounded-full" style={{ width: 12, height: 12, background: level.color }} />
-                <h3 className="text-lg font-semibold" style={{ color: level.color }}>
-                  {level.label}
+                <span className="rounded-full" style={{ width: 12, height: 12, background: shownLevel.color }} />
+                <h3 className="text-lg font-semibold" style={{ color: shownLevel.color }}>
+                  {shownLevel.label}
                 </h3>
               </div>
               <p className="text-sm leading-relaxed" style={{ opacity: 0.78 }}>
-                {level.description}
+                {shownLevel.description}
               </p>
             </div>
 

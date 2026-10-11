@@ -29,7 +29,7 @@ test('gapped block under 10 beats (about 8 s clean): every metric null, recovery
     completionId: 'c-gap', restingMetrics: null, recoveryIndex: null,
     resonance: { rate: null, scores: [], sufficiency: [] }, restingRR: rr(9), rfSegments: [], rfRR: [],
     deviceMode: 'ble', restingMs: 300000, rfSegmentMs: 120000, attempt: 1, phase: null,
-    level: { key: 'high-conservation', label: 'High Conservation' },
+    level: null,
   });
   assert.ok(Object.values(msg.metrics).every((v) => v === null), JSON.stringify(msg.metrics));
 });
@@ -62,4 +62,38 @@ test('a card whose metric is null shows n/a, never an em dash', () => {
   const page = readFileSync(new URL('../src/app/page.tsx', import.meta.url), 'utf8');
   assert.equal(/: '—'\}/.test(page), false);
   assert.equal((page.match(/: NOT_MEASURED\}/g) || []).length, 6, 'control: all six cards use it');
+});
+
+// ----- capacity level -----
+
+const capacityInput = (restingRR, restingMetrics, level) => ({
+  completionId: 'c-level', restingMetrics, recoveryIndex: restingMetrics ? 57 : null,
+  resonance: { rate: null, scores: [], sufficiency: [] }, restingRR, rfSegments: [], rfRR: [],
+  deviceMode: 'sim', restingMs: 300000, rfSegmentMs: 120000, attempt: 1, phase: null, level,
+});
+
+test('a resting block under 10 beats sends capacity_level and capacity_label null, never a level from nothing', () => {
+  const block = rr(6);
+  assert.equal(computeAllMetrics(block), null);
+  const msg = buildCapacityMessage(capacityInput(block, null, null));
+  assert.equal(msg.rawData.capacity_level, null);
+  assert.equal(msg.rawData.capacity_label, null);
+  assert.equal(msg.metrics.recoveryIndex, null);
+  assert.ok('capacity_level' in msg.rawData && 'capacity_label' in msg.rawData, 'keys kept, as null');
+  // control: a measured block still sends its level
+  const full = rr(360);
+  const ok = buildCapacityMessage(capacityInput(full, computeAllMetrics(full), { key: 'building', label: 'Building Capacity' }));
+  assert.equal(ok.rawData.capacity_level, 'building');
+  assert.equal(ok.rawData.capacity_label, 'Building Capacity');
+});
+
+// ⚠ SOURCE GUARD: the page reads a level only from resting metrics, and shows "not measured" otherwise.
+test('the page computes no level without resting metrics and shows the not-measured panel instead', () => {
+  const page = readFileSync(new URL('../src/app/page.tsx', import.meta.url), 'utf8');
+  assert.match(page, /const level = useMemo\(\(\) => \(restingMetrics \? capacityLevel\(restingMetrics\.rmssd\) : null\)/);
+  assert.equal(/capacityLevel\(restingMetrics\?\.rmssd \?\? 0\)/.test(page), false, 'never from rmssd ?? 0');
+  assert.match(page, /const shownLevel = level \?\? UNMEASURED_LEVEL;/);
+  assert.match(page, /label: 'Capacity level not measured'/);
+  const copy = page.slice(page.indexOf('const UNMEASURED_LEVEL'), page.indexOf('function capacityLevel'));
+  assert.equal(/—/.test(copy), false, 'no em dash in the new copy');
 });
