@@ -19,6 +19,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import {
   connectHW9,
+  connectSimulated,
   errorDetail,
   isBLESupported,
   reconnectHW9,
@@ -41,6 +42,10 @@ export interface UsePracticeStrapOptions {
   onData?: (data: HRDataPoint) => void;
   // The strap dropped without being asked to.
   onDropped?: () => void;
+  // ⚠ TEST ONLY. A fake strap (connectSimulated) in place of the HW9: no Bluetooth
+  // call is made and the browser's Bluetooth support does not matter. Read once,
+  // on mount. Hosts pass it only on a test launch, never on a real one.
+  simulate?: boolean;
 }
 
 export interface PracticeStrap {
@@ -78,7 +83,7 @@ export function usePracticeStrap(options: UsePracticeStrapOptions = {}): Practic
   });
 
   useEffect(() => {
-    if (!isBLESupported()) {
+    if (!optionsRef.current.simulate && !isBLESupported()) {
       unsupportedRef.current = true;
       setState('unsupported');
     }
@@ -106,7 +111,11 @@ export function usePracticeStrap(options: UsePracticeStrapOptions = {}): Practic
 
     try {
       let conn: HRConnection | null = null;
-      if (deviceRef.current && !skipSilent) {
+      if (optionsRef.current.simulate) {
+        conn = connectSimulated(handleData, handleDrop, { onBattery: setBattery });
+        strapLog('connect: simulated strap');
+      }
+      if (!conn && deviceRef.current && !skipSilent) {
         setState('reconnecting');
         strapLog('session reconnect: attempting', { device: deviceRef.current.name ?? '(unnamed)' });
         try {
@@ -138,7 +147,7 @@ export function usePracticeStrap(options: UsePracticeStrapOptions = {}): Practic
       }
 
       connectionRef.current = conn;
-      deviceRef.current = conn.device;
+      if (conn.device) deviceRef.current = conn.device;
       skipSilentRef.current = false;
       setBattery(conn.battery);
       setState('connected');

@@ -100,6 +100,8 @@ import {
 } from '@/lib/insight-sweep';
 import { bell, cancelAudio, doubleBell, playAudio } from '@/lib/audio';
 import type { LaunchMode } from '@/lib/launch-token';
+import { PLATFORM_URL } from '@/lib/platform-url';
+import GateScreen from '@/components/GateScreen';
 import {
   clearSession,
   formatSavedAt,
@@ -145,7 +147,6 @@ const AUDIO = {
   reconnected: '15.mp3',
 };
 
-const PLATFORM_URL = process.env.NEXT_PUBLIC_PLATFORM_URL || 'https://university.neuroprogeny.com';
 
 // The coaching call the completion screen sends people to. It is an external
 // booking widget, outside this iframe, so the link has to break out of the frame.
@@ -772,45 +773,13 @@ function PrimaryButton({
   );
 }
 
-// Shown to anyone who reaches the app outside the University. It is the entire
-// page: no assessment state is created and nothing else renders behind it.
-function GateScreen() {
-  return (
-    <div
-      className="min-h-screen flex flex-col items-center justify-center px-6"
-      style={{ background: C.pale, color: C.charcoal }}
-    >
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img
-        src="/neuroprogeny-logo.png"
-        alt="Neuro Progeny"
-        // The supplied PNG has a white background rather than transparency;
-        // multiply drops it out against the pale ground. A transparent export
-        // would let this style go.
-        style={{ width: 200, height: 62, objectFit: 'cover', mixBlendMode: 'multiply' }}
-      />
-
-      <h1 className="text-2xl font-semibold mt-7 mb-3 text-center" style={{ color: C.indigo }}>
-        Capacity Assessment
-      </h1>
-      <p
-        className="text-sm text-center max-w-sm leading-relaxed mb-9"
-        style={{ color: C.charcoal, opacity: 0.7 }}
-      >
-        This assessment is available through Neuro Progeny University. If you have purchased this
-        assessment, log in to your University account and open it from your program.
-      </p>
-
-      <a
-        href={PLATFORM_URL}
-        className="rounded-xl px-7 py-4 text-white text-sm font-semibold tracking-wide"
-        style={{ background: C.blue }}
-      >
-        Go to Neuro Progeny University
-      </a>
-    </div>
-  );
-}
+// The gate, with the assessment's own wording. See src/components/GateScreen.tsx.
+const ASSESSMENT_GATE = {
+  title: 'Capacity Assessment',
+  body:
+    'This assessment is available through Neuro Progeny University. If you have purchased this ' +
+    'assessment, log in to your University account and open it from your program.',
+};
 
 function Panel({ children }: { children: React.ReactNode }) {
   return (
@@ -1758,7 +1727,7 @@ export default function AssessmentPage() {
   // Nothing renders until the launch params have been read, so the assessment
   // cannot flash on screen ahead of the gate.
   if (embedded === null) return <div className="min-h-screen" style={{ background: C.pale }} />;
-  if (!embedded) return <GateScreen />;
+  if (!embedded) return <GateScreen {...ASSESSMENT_GATE} />;
 
   const showAbort = ACTIVE_PHASES.includes(phase);
   // Begin once an armband is connected (a mode is then chosen) or declined (the pace

@@ -95,6 +95,10 @@ export interface PracticeInstrumentProps {
   // narrationManifest()). Return null for a missing clip and the segment falls
   // back to timed text. Omit it and every guided session runs text only.
   resolveNarration?: NarrationResolver;
+  // ⚠ TEST ONLY. Records from a simulated strap instead of the HW9, so the armband
+  // path can be exercised without hardware. The record still says strapMode
+  // 'ble'; a host passes this only on a test launch. Default false.
+  simulateStrap?: boolean;
 }
 
 // An exercise chosen from the list, on its intro screen and not yet started.
@@ -444,6 +448,7 @@ export default function PracticeInstrument({
   audioEnabled = true,
   biometricsEnabled = true,
   resolveNarration,
+  simulateStrap = false,
 }: PracticeInstrumentProps) {
   const [chosen, setChosen] = useState<Chosen | null>(null);
   // Where the person is in the library: the purpose cards, or one purpose's list.
@@ -520,7 +525,7 @@ export default function PracticeInstrument({
     eventsRef.current.push({ t: Date.now(), type: 'strap-drop' });
   }, []);
 
-  const strap = usePracticeStrap({ onData, onDropped });
+  const strap = usePracticeStrap({ onData, onDropped, simulate: simulateStrap });
 
   // Session clock, for display only.
   useEffect(() => {
