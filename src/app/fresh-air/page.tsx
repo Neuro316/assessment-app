@@ -65,7 +65,7 @@ function newCompletionId(): string {
 
 export default function FreshAirPage() {
   const [launch, setLaunch] = useState<FreshAirLaunch | null>(null);
-  // Read for when the message carries it; the current shape sends the record only.
+  // From the launch link; sent as the message's ageBand, and left off when absent.
   const ageBandRef = useRef<AgeBand | null>(null);
   // null while /api/verify-launch is deciding.
   const [tokenValid, setTokenValid] = useState<boolean | null>(null);
@@ -97,7 +97,7 @@ export default function FreshAirPage() {
   const post = useMemo(
     () =>
       oncePerRecord<PracticeSessionRecord>((record) => {
-        const message = buildPracticeComplete(record, newCompletionId(), APP_SHA);
+        const message = buildPracticeComplete(record, newCompletionId(), APP_SHA, ageBandRef.current);
         const isFramed = window.parent !== window;
         const targetOrigin = new URL(PLATFORM_URL).origin;
         // Shape and identity only, never the beats.

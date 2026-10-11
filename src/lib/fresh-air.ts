@@ -8,8 +8,9 @@
 //   token=<jwt>     required: a valid launch token (verified by /api/verify-launch).
 //                   Missing or rejected, the page is refused with the gate screen.
 //   name=<text>     the participant's first name, for the greeting
-//   age_band=<band> as for the assessment, read with launchAgeBand (age-band.ts). Not
-//                   yet sent anywhere: the message carries the record only.
+//   age_band=<band> as for the assessment, read with launchAgeBand (age-band.ts). Sent
+//                   as the message's top-level ageBand; absent from the message when
+//                   the launch did not carry a valid band.
 //   pace=<rate>     optional, the person's resonance pace from the Capacity Assessment:
 //                   one of 4.5, 5, 5.5, 6, 6.5, 7. Shown on the intro when present and
 //                   valid; anything else shows nothing.
@@ -19,6 +20,8 @@
 // session inside the app, as in the assessment.
 //
 // Pure, so the tests can load it directly.
+
+import type { AgeBand } from './age-band';
 
 export interface FreshAirLaunch {
   embedded: boolean;
@@ -64,10 +67,19 @@ export interface PracticeCompleteMessage<R> {
   completionId: string;
   appSha: string | null;
   record: R;
+  // Only when the launch carried age_band; the key is absent otherwise, never null.
+  ageBand?: AgeBand;
 }
 
-export function buildPracticeComplete<R>(record: R, completionId: string, appSha: string | null): PracticeCompleteMessage<R> {
-  return { type: 'practice-complete', completionId, appSha, record };
+export function buildPracticeComplete<R>(
+  record: R,
+  completionId: string,
+  appSha: string | null,
+  ageBand: AgeBand | null = null
+): PracticeCompleteMessage<R> {
+  const message: PracticeCompleteMessage<R> = { type: 'practice-complete', completionId, appSha, record };
+  if (ageBand) message.ageBand = ageBand;
+  return message;
 }
 
 // Posts each record once. The instrument hands a record over on Done, and again on

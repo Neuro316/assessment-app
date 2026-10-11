@@ -33,6 +33,7 @@ import type {
 import type { PhaseEnd, PhaseStart } from './usePacerProgram';
 import { usePracticeStrap, type PracticeStrapState } from './usePracticeStrap';
 import { useSessionWakeLock } from './useSessionWakeLock';
+import { strapModeFor } from './types';
 
 // The platform's tokens (npu-platform-v2 tailwind config): np-blue for actions,
 // teal for progress and the pacer, gold for locks, fire for the balanced-baseline
@@ -96,8 +97,8 @@ export interface PracticeInstrumentProps {
   // back to timed text. Omit it and every guided session runs text only.
   resolveNarration?: NarrationResolver;
   // ⚠ TEST ONLY. Records from a simulated strap instead of the HW9, so the armband
-  // path can be exercised without hardware. The record still says strapMode
-  // 'ble'; a host passes this only on a test launch. Default false.
+  // path can be exercised without hardware. The record says strapMode 'sim'; a
+  // host passes this only on a test launch. Default false.
   simulateStrap?: boolean;
 }
 
@@ -594,7 +595,7 @@ export default function PracticeInstrument({
         rrCount: rr.length,
         minRR: rr.length ? Math.min(...rr) : null,
         maxRR: rr.length ? Math.max(...rr) : null,
-        strapMode: rr.length ? 'ble' : 'none',
+        strapMode: strapModeFor(rr.length, simulateStrap),
         disconnects: disconnectsRef.current,
       },
       narratorId: narratorIdFor(running.exercise, resolveNarration),
@@ -623,7 +624,7 @@ export default function PracticeInstrument({
     // away first, it is flushed without them: see the unmount effect.
     pendingRef.current = record;
     setFinished({ exercise: running.exercise, record });
-  }, [running, strap.state, listenNumber]);
+  }, [running, strap.state, listenNumber, simulateStrap]);
 
   // A record not yet handed over. Flushed on unmount so a session is never lost
   // to a navigation away from the finished screen.

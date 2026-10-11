@@ -1,10 +1,15 @@
 // ===== /fresh-air =====
 // The standalone practice route: gated like the assessment (embedded=true) plus a
 // required launch token, the pace from the link on the intro (or nothing), and exactly
-// one practice-complete per finished session carrying { type, completionId, appSha, record }.
+// one practice-complete per finished session carrying { type, completionId, appSha, record },
+// plus ageBand when the launch carried one.
 
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 
 import {
@@ -14,10 +19,11 @@ import {
   oncePerRecord,
   parseFreshAirLaunch,
 } from '../src/lib/fresh-air.ts';
+import { launchAgeBand } from '../src/lib/age-band.ts';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 
-import { PRACTICE_EXERCISES, PracticeInstrument, narrationManifest } from '../packages/practice/dist/index.js';
+import { PRACTICE_EXERCISES, PracticeInstrument, narrationManifest, strapModeFor } from '../packages/practice/dist/index.js';
 
 const launch = (q) => parseFreshAirLaunch(new URLSearchParams(q));
 const page = readFileSync(new URL('../src/app/fresh-air/page.tsx', import.meta.url), 'utf8');
@@ -44,11 +50,56 @@ test('a finished session posts exactly once, with type, completionId, appSha and
 
 test('the page posts through the guard, to the platform origin only, with a fresh UUID each time', () => {
   assert.match(page, /oncePerRecord<PracticeSessionRecord>/);
-  assert.match(page, /buildPracticeComplete\(record, newCompletionId\(\), APP_SHA\)/);
+  assert.match(page, /buildPracticeComplete\(record, newCompletionId\(\), APP_SHA, /);
   assert.match(page, /crypto\.randomUUID\(\)/);
   assert.match(page, /window\.parent\.postMessage\(message, targetOrigin\)/);
   assert.match(page, /new URL\(PLATFORM_URL\)\.origin/);
   assert.equal((page.match(/postMessage\(/g) || []).length, 1, 'one call site');
+});
+
+// ----- ageBand -----
+
+const band = (q) => launchAgeBand(new URLSearchParams(q));
+
+test('a launch with age_band=40s posts ageBand 40s; a launch without posts no ageBand key', () => {
+  const withBand = buildPracticeComplete({ exerciseId: 'B1' }, 'id-1', 'sha', band('embedded=true&age_band=40s'));
+  assert.equal(withBand.ageBand, '40s');
+  assert.deepEqual(Object.keys(withBand), ['type', 'completionId', 'appSha', 'record', 'ageBand']);
+  const without = buildPracticeComplete({ exerciseId: 'B1' }, 'id-2', 'sha', band('embedded=true'));
+  assert.equal('ageBand' in without, false);
+  assert.equal('ageBand' in JSON.parse(JSON.stringify(without)), false, 'not even as null on the wire');
+  // control: a band that is not one of the assessment's is dropped, not sent
+  assert.equal('ageBand' in buildPracticeComplete({}, 'id-3', 'sha', band('age_band=45')), false);
+  for (const b of ['under30', '30s', '40s', '50s', '60plus']) assert.equal(buildPracticeComplete({}, 'i', null, band(`age_band=${b}`)).ageBand, b);
+  assert.match(page, /buildPracticeComplete\(record, newCompletionId\(\), APP_SHA, ageBandRef\.current\)/);
+  assert.match(page, /ageBandRef\.current = launchAgeBand\(params\)/);
+});
+
+// ----- strapMode -----
+
+test('a sim session records strapMode sim; a pacer session still none; the HW9 still ble', () => {
+  assert.equal(strapModeFor(127, true), 'sim');
+  assert.equal(strapModeFor(0, true), 'none', 'sim offered but the pacer alone: no beats, none');
+  assert.equal(strapModeFor(0, false), 'none');
+  assert.equal(strapModeFor(583, false), 'ble', 'control: a real strap is unchanged');
+  assert.match(instrument, /strapMode: strapModeFor\(rr\.length, simulateStrap\)/);
+});
+
+test('the strapMode type still refuses any other string', () => {
+  const types = fileURLToPath(new URL('../packages/practice/src/types.ts', import.meta.url)).replace(/\\/g, '/');
+  const tsc = fileURLToPath(new URL('../node_modules/typescript/bin/tsc', import.meta.url));
+  const dir = mkdtempSync(join(tmpdir(), 'strapmode-'));
+  const check = (body) => {
+    const file = join(dir, `c${Math.random().toString(36).slice(2)}.ts`);
+    writeFileSync(file, `import type { PracticeSamplesSummary } from '${types.replace(/\.ts$/, '')}';\n${body}\n`);
+    return spawnSync(process.execPath, [tsc, '--noEmit', '--strict', '--skipLibCheck', '--target', 'es2020', '--module', 'esnext', '--moduleResolution', 'bundler', file], { encoding: 'utf8' });
+  };
+  const ok = check(`const a: PracticeSamplesSummary['strapMode'][] = ['ble', 'sim', 'none'];`);
+  assert.equal(ok.status, 0, ok.stdout);
+  const bad = check(`const a: PracticeSamplesSummary['strapMode'] = 'usb';`);
+  assert.notEqual(bad.status, 0, 'usb must not type-check');
+  assert.match(bad.stdout, /'"usb"' is not assignable/);
+  assert.notEqual(check(`const a: PracticeSamplesSummary['strapMode'] = 'Sim';`).status, 0, 'case matters');
 });
 
 // ----- the pace -----

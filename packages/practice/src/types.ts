@@ -255,14 +255,15 @@ export interface PracticeSessionMetrics {
 // What happened in a session's RR stream, without shipping every beat.
 //   rrCount       — RR intervals recorded (after the strap's 200-2000 ms artifact filter)
 //   minRR, maxRR  — extremes in ms; null when no beats were recorded
-//   strapMode     — 'ble' for a real strap, 'none' when Bluetooth was unavailable
-//                   or never connected (the pacer ran alone)
+//   strapMode     — 'ble' for a real strap, 'sim' for the test-only simulated strap,
+//                   'none' when Bluetooth was unavailable or never connected (the
+//                   pacer ran alone)
 //   disconnects   — unexpected strap drops during the session
 export interface PracticeSamplesSummary {
   rrCount: number;
   minRR: number | null;
   maxRR: number | null;
-  strapMode: 'ble' | 'none';
+  strapMode: 'ble' | 'sim' | 'none';
   disconnects: number;
 }
 
@@ -272,6 +273,13 @@ export interface PracticeSamplesSummary {
 //   endedBy  — 'person' when they released it; 'safety-cap' when the backstop did;
 //              'abandoned' when the session ended early while the hold was still
 //              open (heldMs is then the time held up to that moment)
+// What the record says about the strap: 'none' when no beat was recorded, whatever
+// was connected; otherwise 'sim' for the simulated strap and 'ble' for the HW9.
+export function strapModeFor(rrCount: number, simulated: boolean): PracticeSamplesSummary['strapMode'] {
+  if (rrCount === 0) return 'none';
+  return simulated ? 'sim' : 'ble';
+}
+
 export interface PracticeHoldRecord {
   round: number | null;
   heldMs: number;

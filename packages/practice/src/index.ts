@@ -17,7 +17,7 @@ export { rounds } from './pacer';
 // asks every event-locked (media) session to carry.
 export { withBookends } from './pacer';
 
-export { canUseExercise } from './types';
+export { canUseExercise, strapModeFor } from './types';
 
 // The full library (38 exercises across breathing, visualization and
 // mindfulness) and the purposes the library screen groups on.
