@@ -14,6 +14,12 @@
 //   pace=<rate>     optional, the person's resonance pace from the Capacity Assessment:
 //                   one of 4.5, 5, 5.5, 6, 6.5, 7. Shown on the intro when present and
 //                   valid; anything else shows nothing.
+//   pace_source=<s> optional, where the pace came from: lowercase letters, _ and -,
+//                   at most 20 characters, else ignored. "measured" adds "· measured"
+//                   to the pace pill.
+//   tab=<tab>       assessment | practice, the open Fresh Air tab (only with
+//                   NEXT_PUBLIC_FRESH_AIR_ASSESSMENT_TAB=1). Missing or anything else
+//                   opens Assessment.
 //   sim=1           test only: the armband is a simulated strap.
 //
 // There is no biometrics param. Armband or pacer alone is the person's choice per
@@ -28,6 +34,7 @@ export interface FreshAirLaunch {
   token: string | null;
   name: string | null;
   pace: number | null;
+  paceSource: string | null;
   simulateStrap: boolean;
 }
 
@@ -40,12 +47,60 @@ export function launchPace(raw: string | null): number | null {
   return (FRESH_AIR_PACES as readonly number[]).includes(n) ? n : null;
 }
 
+export function launchPaceSource(raw: string | null): string | null {
+  return raw !== null && /^[a-z_-]{1,20}$/.test(raw) ? raw : null;
+}
+
+// The pill at the right of the header. No pace, no pill.
+export function pacePillText(pace: number | null, paceSource: string | null): string | null {
+  if (pace === null) return null;
+  return `Your pace ${pace} per min${paceSource === 'measured' ? ' · measured' : ''}`;
+}
+
+// ----- the shell's tabs -----
+
+// Read at build, like the other NEXT_PUBLIC_ values. Anything but "1" keeps the
+// tab bar (and the Assessment placeholder) away from live members.
+export function assessmentTabEnabled(flag: string | undefined): boolean {
+  return flag === '1';
+}
+
+export const FRESH_AIR_TABS = ['assessment', 'practice'] as const;
+export type FreshAirTab = (typeof FRESH_AIR_TABS)[number];
+
+export function freshAirTab(params: URLSearchParams): FreshAirTab {
+  const raw = params.get('tab');
+  return (FRESH_AIR_TABS as readonly string[]).includes(raw ?? '') ? (raw as FreshAirTab) : 'assessment';
+}
+
+// What pressing a tab does. Leaving Practice while a session runs asks first
+// ("End this session?"); everything else switches at once.
+export type TabPress = 'stay' | 'switch' | 'confirm';
+
+export function tabPress(current: FreshAirTab, next: FreshAirTab, sessionRunning: boolean): TabPress {
+  if (next === current) return 'stay';
+  return current === 'practice' && sessionRunning ? 'confirm' : 'switch';
+}
+
+// The greeting at the top of the content, when the launch carried a name.
+export function welcomeLine(name: string | null): string | null {
+  return name ? `Welcome back, ${name}` : null;
+}
+
+// The query string with tab set and every launch param kept.
+export function searchWithTab(search: string, tab: FreshAirTab): string {
+  const params = new URLSearchParams(search);
+  params.set('tab', tab);
+  return `?${params.toString()}`;
+}
+
 export function parseFreshAirLaunch(params: URLSearchParams): FreshAirLaunch {
   return {
     embedded: params.get('embedded') === 'true',
     token: params.get('token') || null,
     name: params.get('name') || null,
     pace: launchPace(params.get('pace')),
+    paceSource: launchPaceSource(params.get('pace_source')),
     simulateStrap: params.get('sim') === '1',
   };
 }

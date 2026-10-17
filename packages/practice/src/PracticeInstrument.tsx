@@ -21,6 +21,7 @@ import { narratorIdFor, programFor, type NarrationResolver } from './narration';
 import { PRACTICE_PURPOSES } from './library';
 import { computeSessionMetrics, emptySessionMetrics } from './hrv-metrics';
 import PacerSession from './PacerSession';
+import { handOverPending } from './hand-over';
 import type {
   PracticeAccessArm,
   PracticeExercise,
@@ -100,6 +101,14 @@ export interface PracticeInstrumentProps {
   // path can be exercised without hardware. The record says strapMode 'sim'; a
   // host passes this only on a test launch. Default false.
   simulateStrap?: boolean;
+  // Told true when a session starts and false when it stops, for a host that must
+  // ask before navigating away from one. Omit it and nothing is told.
+  onActiveChange?: (active: boolean) => void;
+  // A host's request to end the running session now. Each new value ends it the
+  // way End early does and hands the record over at once, without the finished
+  // screen. Ignored when no session is running, and on the first render. Omit it
+  // and sessions end only from inside the instrument.
+  endSignal?: number;
 }
 
 // An exercise chosen from the list, on its intro screen and not yet started.
@@ -450,6 +459,8 @@ export default function PracticeInstrument({
   biometricsEnabled = true,
   resolveNarration,
   simulateStrap = false,
+  onActiveChange,
+  endSignal,
 }: PracticeInstrumentProps) {
   const [chosen, setChosen] = useState<Chosen | null>(null);
   // Where the person is in the library: the purpose cards, or one purpose's list.
@@ -633,11 +644,29 @@ export default function PracticeInstrument({
   onRecordRef.current = onRecordSession;
   useEffect(
     () => () => {
-      if (pendingRef.current) onRecordRef.current(pendingRef.current);
-      pendingRef.current = null;
+      handOverPending(pendingRef, (record) => onRecordRef.current(record));
     },
     []
   );
+
+  const active = running !== null;
+  const onActiveChangeRef = useRef(onActiveChange);
+  onActiveChangeRef.current = onActiveChange;
+  useEffect(() => {
+    onActiveChangeRef.current?.(active);
+  }, [active]);
+
+  // The host asked for the session to end: End early's path, then the record goes
+  // over now rather than waiting on a finished screen nobody is looking at.
+  const lastEndSignalRef = useRef(endSignal);
+  useEffect(() => {
+    if (endSignal === lastEndSignalRef.current) return;
+    lastEndSignalRef.current = endSignal;
+    if (!running) return;
+    end('abandoned');
+    handOverPending(pendingRef, (record) => onRecordRef.current(record));
+    setFinished(null);
+  }, [endSignal, running, end]);
 
   const container: CSSProperties = {
     width: '100%',
