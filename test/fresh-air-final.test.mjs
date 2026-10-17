@@ -47,6 +47,16 @@ test('every narrow pill is short: at most 10 characters', () => {
   }
 });
 
+// ----- found with the real HW9 -----
+
+test('no silent retry starts past the 20 second window, even after the 2 second wait', () => {
+  const provider = read('../packages/practice/src/StrapProvider.tsx');
+  assert.match(
+    provider,
+    /await new Promise\(\(resolve\) => setTimeout\(resolve, RETRY_EVERY_MS\)\);\s+\/\/[^\n]*\n\s+if \(Date\.now\(\) - started >= RETRY_WINDOW_MS\) return;/
+  );
+});
+
 // ----- 2. missing metric -----
 
 test('a metric the session did not record says "Not recorded", in the value\'s own style', () => {

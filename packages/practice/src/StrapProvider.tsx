@@ -77,6 +77,8 @@ export function StrapProvider({
     const started = Date.now();
     while (Date.now() - started < RETRY_WINDOW_MS) {
       await new Promise((resolve) => setTimeout(resolve, RETRY_EVERY_MS));
+      // No attempt starts past the window, even after the wait.
+      if (Date.now() - started >= RETRY_WINDOW_MS) return;
       // Connected, disconnected or being connected by a tap: nothing left to do.
       if (unmountedRef.current || machineRef.current.state !== 'lost') return;
       if (await reconnectRef.current()) return;
