@@ -137,8 +137,8 @@ export function ArmbandSheet({ onClose, onPracticeWithPacer }: { onClose: () => 
     content = (
       <>
         <p style={body}>
-          Wet the strap pads, fasten it snug just below your chest, then tap Connect and choose your armband from the
-          list your browser shows.
+          Put the armband on your forearm or upper arm, snug against bare skin with the sensor facing in, then tap
+          Connect and choose it from the list your browser shows.
         </p>
         <button
           type="button"

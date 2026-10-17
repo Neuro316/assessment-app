@@ -124,9 +124,13 @@ export function armbandPill(state: ArmbandPillState, bpm: number | null, narrow:
         : { text: 'Connect armband', ariaLabel: null, dot: false };
     case 'connecting':
     case 'reconnecting':
-      return { text: 'Connecting armband', ariaLabel: null, dot: false };
+      return narrow
+        ? { text: 'Connecting', ariaLabel: 'Connecting armband', dot: false }
+        : { text: 'Connecting armband', ariaLabel: null, dot: false };
     case 'lost':
-      return { text: 'Armband disconnected', ariaLabel: null, dot: false };
+      return narrow
+        ? { text: 'Reconnect', ariaLabel: 'Armband disconnected, tap to reconnect', dot: false }
+        : { text: 'Armband disconnected', ariaLabel: null, dot: false };
     case 'unsupported':
       return { text: 'Pacer only', ariaLabel: null, dot: false };
   }

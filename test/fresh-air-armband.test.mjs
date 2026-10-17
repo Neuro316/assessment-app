@@ -94,14 +94,16 @@ test("the instrument's strap bar reads the shared state as it reads its own", ()
 // ----- the pill -----
 
 test('the pill says what was agreed, in every state, at both widths', () => {
+  // Wide: the full words. (Narrow, see fresh-air-final.test.mjs.)
+  assert.equal(armbandPill('connecting', null, false).text, 'Connecting armband');
+  assert.equal(armbandPill('reconnecting', null, false).text, 'Connecting armband');
+  assert.equal(armbandPill('lost', 72, false).text, 'Armband disconnected');
   for (const narrow of [false, true]) {
-    assert.equal(armbandPill('connecting', null, narrow).text, 'Connecting armband');
-    assert.equal(armbandPill('reconnecting', null, narrow).text, 'Connecting armband');
-    assert.equal(armbandPill('lost', 72, narrow).text, 'Armband disconnected');
     assert.equal(armbandPill('unsupported', null, narrow).text, 'Pacer only');
+    assert.equal(armbandPill('unsupported', null, narrow).ariaLabel, null);
     for (const s of ['idle', 'connecting', 'reconnecting', 'lost', 'unsupported']) {
       assert.equal(armbandPill(s, 64, narrow).dot, false, s);
-      if (s !== 'idle') assert.equal(armbandPill(s, 64, narrow).ariaLabel, null, s);
+      if (!narrow) assert.equal(armbandPill(s, 64, narrow).ariaLabel, null, s);
     }
   }
   // Idle goes short under 640px, with the full words as its label.
@@ -145,7 +147,7 @@ test('the sheet: a modal dialog, Escape closes, Tab stays inside, bottom sheet u
 });
 
 test('the sheet says what was agreed when not connected, and when connected', () => {
-  assert.match(sheet, /Wet the strap pads, fasten it snug just below your chest, then tap Connect and choose your armband from the\s+list your browser shows\./);
+  assert.match(sheet, /Put the armband on your forearm or upper arm, snug against bare skin with the sensor facing in, then tap\s+Connect and choose it from the list your browser shows\./);
   assert.match(sheet, /\{working \? 'Connecting armband' : 'Connect armband'\}/);
   assert.match(sheet, /onClick=\{\(\) => void strap\.connect\(\)\}/, 'connect runs straight from the tap');
   assert.match(sheet, />Signal clean\. Used by Practice and Assessment\.</);

@@ -119,11 +119,10 @@ test('under 640px the pace pill reads "Pace 5.5", with the full words as its lab
   assert.equal(pacePillText(5.5, 'measured'), 'Your pace 5.5 per min · measured', 'wide is unchanged');
 });
 
-test('under 640px the idle armband pill reads "Connect"; the other states keep their words', () => {
+test('under 640px the idle armband pill reads "Connect"', () => {
   assert.deepEqual(armbandPill('idle', null, true), { text: 'Connect', ariaLabel: 'Connect armband', dot: false });
   assert.equal(armbandPill('idle', null, false).text, 'Connect armband');
-  assert.equal(armbandPill('lost', null, true).text, 'Armband disconnected');
-  assert.equal(armbandPill('connecting', null, true).text, 'Connecting armband');
+  assert.equal(armbandPill('unsupported', null, true).text, 'Pacer only');
 });
 
 test('the short pace pill is used only narrow and only with the tabs; flag off keeps the long one', () => {

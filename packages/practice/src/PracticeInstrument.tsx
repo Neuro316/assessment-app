@@ -519,7 +519,7 @@ function MetricLine({ label, value, unit }: { label: string; value: number | nul
     <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', fontSize: 14 }}>
       <span style={{ opacity: 0.65 }}>{label}</span>
       <span style={{ color: C.indigo, fontWeight: 600 }}>
-        {value === null ? '·' : `${value}${unit ? ` ${unit}` : ''}`}
+        {value === null ? 'Not recorded' : `${value}${unit ? ` ${unit}` : ''}`}
       </span>
     </div>
   );
