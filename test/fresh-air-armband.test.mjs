@@ -116,7 +116,7 @@ test('the pill says what was agreed, in every state, at both widths', () => {
     dot: true,
   });
   // Connected before the first beat has arrived.
-  assert.equal(armbandPill('connected', null, true).text, 'Armband connected');
+  assert.equal(armbandPill('connected', null, false).text, 'Armband connected');
 });
 
 test('the pill is a 44px button that opens the sheet, with an aria-hidden green dot, under 640px narrow', () => {

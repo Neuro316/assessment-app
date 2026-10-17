@@ -33,10 +33,17 @@ test('under 640px lost reads "Reconnect", labelled as disconnected and tappable'
   assert.deepEqual(armbandPill('lost', 70, false), { text: 'Armband disconnected', ariaLabel: null, dot: false });
 });
 
+test('connected before the first beat reads "Connected" under 640px', () => {
+  assert.deepEqual(armbandPill('connected', null, true), { text: 'Connected', ariaLabel: 'Armband connected', dot: true });
+  assert.deepEqual(armbandPill('connected', null, false), { text: 'Armband connected', ariaLabel: null, dot: true });
+});
+
 test('every narrow pill is short: at most 10 characters', () => {
   for (const s of ['idle', 'connecting', 'reconnecting', 'lost', 'unsupported', 'connected']) {
-    const t = armbandPill(s, 188, true).text;
-    assert.ok(t.length <= 10, `${s}: "${t}"`);
+    for (const bpm of [188, null]) {
+      const t = armbandPill(s, bpm, true).text;
+      assert.ok(t.length <= 10, `${s}: "${t}"`);
+    }
   }
 });
 

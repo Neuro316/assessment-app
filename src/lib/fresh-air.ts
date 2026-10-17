@@ -114,7 +114,12 @@ export interface ArmbandPill {
 export function armbandPill(state: ArmbandPillState, bpm: number | null, narrow: boolean): ArmbandPill {
   switch (state) {
     case 'connected':
-      if (bpm === null) return { text: 'Armband connected', ariaLabel: null, dot: true };
+      if (bpm === null) {
+        // Before the first beat arrives.
+        return narrow
+          ? { text: 'Connected', ariaLabel: 'Armband connected', dot: true }
+          : { text: 'Armband connected', ariaLabel: null, dot: true };
+      }
       return narrow
         ? { text: `${bpm} bpm`, ariaLabel: `Armband connected, ${bpm} beats per minute`, dot: true }
         : { text: `Armband connected · ${bpm} bpm`, ariaLabel: null, dot: true };
