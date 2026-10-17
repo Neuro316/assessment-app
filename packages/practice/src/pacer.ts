@@ -192,7 +192,7 @@ export function manualEnd(phase: PacerPhase, elapsedMs: number): { label: string
       return { label: phase.continueLabel ?? 'Finish', enabled: elapsedMs >= min };
     }
     case 'self-paced-hold':
-      return { label: 'Release — breathe', enabled: true };
+      return { label: 'Release · breathe', enabled: true };
     case 'media': {
       const min = (phase.minDurationSec ?? 0) * 1000;
       const isTrack = phase.asset.kind === 'audio' || phase.asset.kind === 'video';

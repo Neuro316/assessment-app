@@ -1,6 +1,8 @@
 // ===== @neuroprogeny/practice =====
 
 export { default as PracticeInstrument } from './PracticeInstrument';
+// The after-session check-ins, for a host that ends a session itself.
+export { AfterSessionRatings, NO_RATINGS, withAfterRatings } from './PracticeInstrument';
 export type { PracticeInstrumentProps } from './PracticeInstrument';
 
 export { usePracticeStrap } from './usePracticeStrap';
@@ -12,7 +14,8 @@ export type {
 export type { HRDataPoint } from './bluetooth';
 
 // One armband connection a host owns and shares across screens.
-export { StrapProvider, useSharedStrap } from './StrapProvider';
+export { RETRY_EVERY_MS, RETRY_WINDOW_MS, StrapProvider, useSharedStrap } from './StrapProvider';
+export type { StrapSimulation } from './usePracticeStrap';
 export type { SharedStrap, StrapListener } from './StrapProvider';
 export { STRAP_START, instrumentStrapState, strapEventFor, strapReducer } from './strap-state';
 export type { SharedStrapState, StrapEvent, StrapMachine } from './strap-state';

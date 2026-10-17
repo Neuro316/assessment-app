@@ -14,7 +14,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useReducer,
 
 import type { HRDataPoint } from './bluetooth';
 import { STRAP_START, strapEventFor, strapReducer, type SharedStrapState } from './strap-state';
-import { usePracticeStrap } from './usePracticeStrap';
+import { usePracticeStrap, type StrapSimulation } from './usePracticeStrap';
 
 export interface StrapListener {
   onData?: (data: HRDataPoint) => void;
@@ -44,9 +44,44 @@ export function useSharedStrap(): SharedStrap | null {
   return useContext(StrapContext);
 }
 
-export function StrapProvider({ simulate = false, children }: { simulate?: boolean; children: ReactNode }) {
+// After a drop, the strap is tried again silently (no picker, so no tap needed)
+// every RETRY_EVERY_MS for RETRY_WINDOW_MS. Past the window it stays lost until
+// the person taps Connect.
+export const RETRY_EVERY_MS = 2_000;
+export const RETRY_WINDOW_MS = 20_000;
+
+export function StrapProvider({
+  simulate = false,
+  simulation,
+  children,
+}: {
+  simulate?: boolean;
+  // ⚠ TEST ONLY, and only with simulate.
+  simulation?: StrapSimulation | null;
+  children: ReactNode;
+}) {
   const listenersRef = useRef(new Set<StrapListener>());
   const [machine, dispatch] = useReducer(strapReducer, STRAP_START);
+  const machineRef = useRef(machine);
+  machineRef.current = machine;
+  const reconnectRef = useRef<() => Promise<boolean>>(async () => false);
+  const unmountedRef = useRef(false);
+  useEffect(
+    () => () => {
+      unmountedRef.current = true;
+    },
+    []
+  );
+
+  const retryAfterDrop = useCallback(async () => {
+    const started = Date.now();
+    while (Date.now() - started < RETRY_WINDOW_MS) {
+      await new Promise((resolve) => setTimeout(resolve, RETRY_EVERY_MS));
+      // Connected, disconnected or being connected by a tap: nothing left to do.
+      if (unmountedRef.current || machineRef.current.state !== 'lost') return;
+      if (await reconnectRef.current()) return;
+    }
+  }, []);
 
   const onData = useCallback((data: HRDataPoint) => {
     for (const l of listenersRef.current) l.onData?.(data);
@@ -54,9 +89,18 @@ export function StrapProvider({ simulate = false, children }: { simulate?: boole
   const onDropped = useCallback(() => {
     dispatch({ type: 'dropped' });
     for (const l of listenersRef.current) l.onDropped?.();
-  }, []);
+    void retryAfterDrop();
+  }, [retryAfterDrop]);
 
-  const strap = usePracticeStrap({ onData, onDropped, simulate });
+  const sim = simulate ? simulation ?? undefined : undefined;
+  const strap = usePracticeStrap({ onData, onDropped, simulate, simulation: sim });
+  reconnectRef.current = strap.reconnectSilently;
+
+  // Test only: report no Web Bluetooth, as an iPhone browser would.
+  const noBluetooth = !!sim?.noBluetooth;
+  useEffect(() => {
+    if (noBluetooth) dispatch({ type: 'unsupported' });
+  }, [noBluetooth]);
 
   // The hook's own states, read as the reducer's events.
   const prevRef = useRef(strap.state);
@@ -73,7 +117,11 @@ export function StrapProvider({ simulate = false, children }: { simulate?: boole
     };
   }, []);
 
-  const { connect, disconnect: hookDisconnect } = strap;
+  const { connect: hookConnect, disconnect: hookDisconnect } = strap;
+  const connect = useCallback(async () => {
+    if (machineRef.current.state === 'unsupported') return;
+    await hookConnect();
+  }, [hookConnect]);
   const disconnect = useCallback(() => {
     dispatch({ type: 'disconnected' });
     hookDisconnect();

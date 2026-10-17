@@ -178,7 +178,7 @@ test('rounds: phases alternate hold / freeform', () => {
 test('hold: release button is always enabled', () => {
   const m = manualEnd(HOLD_ROUNDS[0], 0);
   assert.equal(m?.enabled, true);
-  assert.equal(m?.label, 'Release — breathe');
+  assert.equal(m?.label, 'Release · breathe');
 });
 
 test('hold: the safety cap is the automatic end (45s)', () => {

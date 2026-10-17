@@ -4,8 +4,11 @@
 // the header alone above whatever the page renders. University platform tokens,
 // not the assessment's.
 
-import { useEffect, useRef, type KeyboardEvent, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 
+import { AfterSessionRatings, NO_RATINGS, type SessionRatings } from '@neuroprogeny/practice';
+
+import { useNarrow } from '@/components/useNarrow';
 import { FRESH_AIR_TABS, type FreshAirTab } from '@/lib/fresh-air';
 
 export const U = {
@@ -46,17 +49,23 @@ interface Tabs {
 export default function FreshAirShell({
   pill,
   tabs,
+  compactPill,
   armband,
   background = U.page,
   children,
 }: {
   pill: string | null;
   tabs?: Tabs;
+  // Under 640px, with the tabs only: the pace pill's short form, so the pills and
+  // the name share one row.
+  compactPill?: { text: string; ariaLabel: string } | null;
   // Right of the pace pill: the armband pill, with the tabs only.
   armband?: ReactNode;
   background?: string;
   children: ReactNode;
 }) {
+  const narrow = useNarrow();
+  const shortPill = narrow && compactPill ? compactPill : null;
   // Left and right move between tabs, as a tablist should.
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     if (!tabs || (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight')) return;
@@ -135,6 +144,9 @@ export default function FreshAirShell({
               {pill ? (
                 <span
                   data-pace-pill
+                  // The short form's words are its label; role img lets the label stand.
+                  role={shortPill ? 'img' : undefined}
+                  aria-label={shortPill?.ariaLabel}
                   style={{
                     background: U.tint,
                     color: U.dark,
@@ -145,7 +157,7 @@ export default function FreshAirShell({
                     whiteSpace: 'nowrap',
                   }}
                 >
-                  {pill}
+                  {shortPill ? shortPill.text : pill}
                 </span>
               ) : null}
               {armband}
@@ -159,11 +171,31 @@ export default function FreshAirShell({
   );
 }
 
+// The after-session check-ins, once End and switch has ended the session.
+export interface AfterEndRating {
+  onSave: (ratingsAfter: SessionRatings, ratingNote: string) => void;
+  onSkip: () => void;
+}
+
 // Asked before a tab press would leave a running session. Keep practicing has the
-// focus and is what Escape does; Tab stays inside the dialog.
-export function EndSessionDialog({ onKeep, onEnd }: { onKeep: () => void; onEnd: () => void }) {
+// focus and is what Escape does. Once End and switch has ended it, the same dialog
+// asks how they feel now: focus on the first rating, Escape and Close skip. Tab
+// stays inside the dialog throughout.
+export function EndSessionDialog({
+  onKeep,
+  onEnd,
+  rating,
+}: {
+  onKeep: () => void;
+  onEnd: () => void;
+  rating?: AfterEndRating | null;
+}) {
+  const panelRef = useRef<HTMLDivElement>(null);
   const keepRef = useRef<HTMLButtonElement>(null);
-  const endRef = useRef<HTMLButtonElement>(null);
+  // End and switch was pressed and the instrument has not answered yet.
+  const [ending, setEnding] = useState(false);
+  const [ratingsAfter, setRatingsAfter] = useState<SessionRatings>(NO_RATINGS);
+  const [ratingNote, setRatingNote] = useState('');
 
   useEffect(() => {
     const before = document.activeElement as HTMLElement | null;
@@ -171,17 +203,27 @@ export function EndSessionDialog({ onKeep, onEnd }: { onKeep: () => void; onEnd:
     return () => before?.focus();
   }, []);
 
+  const showingRatings = !!rating;
+  useEffect(() => {
+    if (showingRatings) panelRef.current?.querySelector<HTMLButtonElement>('[data-after-ratings] button')?.focus();
+  }, [showingRatings]);
+
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     if (e.key === 'Escape') {
       e.preventDefault();
-      onKeep();
+      if (rating) rating.onSkip();
+      else if (!ending) onKeep();
       return;
     }
     if (e.key !== 'Tab') return;
+    const order = Array.from(
+      panelRef.current?.querySelectorAll<HTMLElement>('button:not([disabled]), input:not([disabled])') ?? []
+    );
+    if (order.length === 0) return;
     e.preventDefault();
-    const order = [keepRef.current, endRef.current];
-    const i = order.indexOf(document.activeElement as HTMLButtonElement);
-    order[(i + (e.shiftKey ? order.length - 1 : 1)) % order.length]?.focus();
+    const i = order.indexOf(document.activeElement as HTMLElement);
+    const next = i === -1 ? 0 : (i + (e.shiftKey ? order.length - 1 : 1)) % order.length;
+    order[next].focus();
   };
 
   const button = {
@@ -209,44 +251,105 @@ export function EndSessionDialog({ onKeep, onEnd }: { onKeep: () => void; onEnd:
       }}
     >
       <div
+        ref={panelRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby="fresh-air-end-title"
-        aria-describedby="fresh-air-end-body"
+        aria-describedby={rating ? undefined : 'fresh-air-end-body'}
+        data-end-dialog={rating ? 'rate' : 'confirm'}
         onKeyDown={onKeyDown}
         style={{
           width: '100%',
           maxWidth: 400,
+          maxHeight: '100%',
+          overflowY: 'auto',
           background: U.card,
           borderRadius: 12,
           boxShadow: '0 10px 30px rgba(0, 0, 0, 0.15)',
           padding: 24,
         }}
       >
-        <h2 id="fresh-air-end-title" style={{ margin: 0, fontSize: 18, fontWeight: 600, color: U.dark }}>
-          End this session?
-        </h2>
-        <p id="fresh-air-end-body" style={{ margin: '8px 0 20px', fontSize: 15, lineHeight: 1.5, color: U.muted }}>
-          Your session is still running. Switching now ends it.
-        </p>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, justifyContent: 'flex-end' }}>
-          <button
-            ref={endRef}
-            type="button"
-            onClick={onEnd}
-            style={{ ...button, background: U.card, color: U.dark, border: `1px solid ${U.headerBorder}` }}
-          >
-            End and switch
-          </button>
-          <button
-            ref={keepRef}
-            type="button"
-            onClick={onKeep}
-            style={{ ...button, background: U.blue, color: '#ffffff', border: 'none' }}
-          >
-            Keep practicing
-          </button>
-        </div>
+        {rating ? (
+          <>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+              <h2 id="fresh-air-end-title" style={{ margin: 0, fontSize: 18, fontWeight: 600, color: U.dark }}>
+                How do you feel now?
+              </h2>
+              <button
+                type="button"
+                onClick={rating.onSkip}
+                aria-label="Close"
+                style={{
+                  minWidth: 44,
+                  minHeight: 44,
+                  border: 'none',
+                  background: 'none',
+                  color: U.muted,
+                  fontSize: 22,
+                  lineHeight: 1,
+                  cursor: 'pointer',
+                }}
+              >
+                ×
+              </button>
+            </div>
+            <div style={{ margin: '12px 0 20px' }}>
+              <AfterSessionRatings
+                ratings={ratingsAfter}
+                onRate={setRatingsAfter}
+                ratingNote={ratingNote}
+                onRatingNote={setRatingNote}
+              />
+            </div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, justifyContent: 'flex-end' }}>
+              <button
+                type="button"
+                onClick={rating.onSkip}
+                style={{ ...button, background: U.card, color: U.dark, border: `1px solid ${U.headerBorder}` }}
+              >
+                Skip
+              </button>
+              <button
+                type="button"
+                onClick={() => rating.onSave(ratingsAfter, ratingNote)}
+                style={{ ...button, background: U.blue, color: '#ffffff', border: 'none' }}
+              >
+                Save and switch
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            <h2 id="fresh-air-end-title" style={{ margin: 0, fontSize: 18, fontWeight: 600, color: U.dark }}>
+              End this session?
+            </h2>
+            <p id="fresh-air-end-body" style={{ margin: '8px 0 20px', fontSize: 15, lineHeight: 1.5, color: U.muted }}>
+              Your session is still running. Switching now ends it.
+            </p>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, justifyContent: 'flex-end' }}>
+              <button
+                type="button"
+                disabled={ending}
+                onClick={() => {
+                  setEnding(true);
+                  onEnd();
+                }}
+                style={{ ...button, background: U.card, color: U.dark, border: `1px solid ${U.headerBorder}` }}
+              >
+                End and switch
+              </button>
+              <button
+                ref={keepRef}
+                type="button"
+                disabled={ending}
+                onClick={onKeep}
+                style={{ ...button, background: U.blue, color: '#ffffff', border: 'none' }}
+              >
+                Keep practicing
+              </button>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );

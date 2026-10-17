@@ -95,16 +95,18 @@ test("the instrument's strap bar reads the shared state as it reads its own", ()
 
 test('the pill says what was agreed, in every state, at both widths', () => {
   for (const narrow of [false, true]) {
-    assert.equal(armbandPill('idle', null, narrow).text, 'Connect armband');
     assert.equal(armbandPill('connecting', null, narrow).text, 'Connecting armband');
     assert.equal(armbandPill('reconnecting', null, narrow).text, 'Connecting armband');
     assert.equal(armbandPill('lost', 72, narrow).text, 'Armband disconnected');
     assert.equal(armbandPill('unsupported', null, narrow).text, 'Pacer only');
     for (const s of ['idle', 'connecting', 'reconnecting', 'lost', 'unsupported']) {
       assert.equal(armbandPill(s, 64, narrow).dot, false, s);
-      assert.equal(armbandPill(s, 64, narrow).ariaLabel, null, s);
+      if (s !== 'idle') assert.equal(armbandPill(s, 64, narrow).ariaLabel, null, s);
     }
   }
+  // Idle goes short under 640px, with the full words as its label.
+  assert.deepEqual(armbandPill('idle', null, false), { text: 'Connect armband', ariaLabel: null, dot: false });
+  assert.deepEqual(armbandPill('idle', null, true), { text: 'Connect', ariaLabel: 'Connect armband', dot: false });
   assert.deepEqual(armbandPill('connected', 64, false), { text: 'Armband connected · 64 bpm', ariaLabel: null, dot: true });
   assert.deepEqual(armbandPill('connected', 64, true), {
     text: '64 bpm',
@@ -121,7 +123,8 @@ test('the pill is a 44px button that opens the sheet, with an aria-hidden green 
   assert.match(sheet, /minHeight: 44,/);
   assert.match(sheet, /const GREEN = '#2A9D8F';/);
   assert.match(sheet, /<span aria-hidden="true" style=\{\{ width: 8, height: 8, borderRadius: '50%', background: GREEN/);
-  assert.match(sheet, /matchMedia\('\(max-width: 639px\)'\)/);
+  assert.match(sheet, /const narrow = useNarrow\(\);/);
+  assert.match(read('../src/components/useNarrow.ts'), /matchMedia\('\(max-width: 639px\)'\)/);
   assert.match(page, /armband=\{<ArmbandPill onOpen=\{\(\) => setArmbandOpen\(true\)\} \/>\}/);
 });
 
@@ -168,7 +171,7 @@ test('unsupported: Pacer only, the words for iPhone browsers, and a way to the p
 
 test('without sharedStrap the instrument uses its own connection, exactly as before', () => {
   assert.match(instrument, /const internalStrap = usePracticeStrap\(\{ onData, onDropped, simulate: simulateStrap \}\);/);
-  assert.match(instrument, /const strap: PracticeStrap = sharedStrap\s+\? \{[\s\S]*?\}\s+: internalStrap;/);
+  assert.match(instrument, /const strap: Omit<PracticeStrap, 'reconnectSilently'> = sharedStrap\s+\? \{[\s\S]*?\}\s+: internalStrap;/);
   // The shared connection feeds the same onData and onDropped, so rrSeries is stamped the same way.
   assert.match(instrument, /useEffect\(\(\) => subscribeShared\?\.\(\{ onData, onDropped \}\), \[subscribeShared, onData, onDropped\]\);/);
   assert.match(provider, /for \(const l of listenersRef\.current\) l\.onData\?\.\(data\);/);
@@ -181,7 +184,7 @@ test('flag off: no provider, no pill, no sheet, and the instrument is not handed
   assert.match(off, /\{instrument\(\)\}/);
   assert.match(page, /\{\.\.\.\(sharedStrap \? \{ sharedStrap \} : \{\}\)\}/, 'the prop is left off when there is none');
   const on = page.slice(page.indexOf('// One armband connection, above both tabs'));
-  assert.match(on, /<StrapProvider simulate=\{launch\.simulateStrap\}>/);
+  assert.match(on, /<StrapProvider simulate=\{launch\.simulateStrap\} simulation=\{launch\.simulation\}>/);
 });
 
 // ----- what the package gained for the assessment -----

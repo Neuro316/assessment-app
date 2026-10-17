@@ -6,28 +6,15 @@
 // so the Assessment and Practice tabs see one connection. Behind the Assessment tab
 // flag, like the tabs.
 
-import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
+import { useEffect, useRef, type KeyboardEvent } from 'react';
 
 import { useSharedStrap } from '@neuroprogeny/practice';
 
 import { U } from '@/components/FreshAirShell';
+import { useNarrow } from '@/components/useNarrow';
 import { armbandPill } from '@/lib/fresh-air';
 
 const GREEN = '#2A9D8F';
-
-// Under 640px, the width at which the pill drops to the rate alone and the sheet
-// comes up from the bottom.
-function useNarrow(): boolean {
-  const [narrow, setNarrow] = useState(false);
-  useEffect(() => {
-    const mq = window.matchMedia('(max-width: 639px)');
-    const update = () => setNarrow(mq.matches);
-    update();
-    mq.addEventListener('change', update);
-    return () => mq.removeEventListener('change', update);
-  }, []);
-  return narrow;
-}
 
 export function ArmbandPill({ onOpen }: { onOpen: () => void }) {
   const strap = useSharedStrap();

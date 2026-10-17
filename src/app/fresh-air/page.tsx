@@ -11,10 +11,12 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 
 import {
   PracticeInstrument,
+  NO_RATINGS,
   StrapProvider,
   canUseExercise,
   narrationManifest,
   useSharedStrap,
+  withAfterRatings,
   PRACTICE_EXERCISES,
   type PracticeExercise,
   type PracticePerson,
@@ -29,6 +31,7 @@ import { launchAgeBand, type AgeBand } from '@/lib/age-band';
 import {
   assessmentTabEnabled,
   buildPracticeComplete,
+  compactPacePill,
   freshAirAccess,
   freshAirTab,
   narrationUrl,
@@ -90,6 +93,13 @@ export default function FreshAirPage() {
   // Bumped to have the instrument end the running session (End and switch).
   const [endSignal, setEndSignal] = useState(0);
   const [confirmingSwitch, setConfirmingSwitch] = useState<FreshAirTab | null>(null);
+  // A session End and switch has ended, waiting on its after-session ratings. The
+  // record is posted once, by settle, whichever way the ratings end.
+  const [afterEnd, setAfterEnd] = useState<{
+    record: PracticeSessionRecord;
+    settle: (final: PracticeSessionRecord | null) => boolean;
+    target: FreshAirTab;
+  } | null>(null);
   const [armbandOpen, setArmbandOpen] = useState(false);
 
   useEffect(() => {
@@ -149,14 +159,55 @@ export default function FreshAirPage() {
     if (press === 'confirm') setConfirmingSwitch(next);
   };
 
-  // The instrument ends the session as End early does and posts the record once,
-  // through onRecordSession, before the tab changes.
+  // The instrument ends the session as End early does and hands the record back
+  // unposted (onHostEnded); the dialog then asks for the after-session ratings.
   const endAndSwitch = () => {
     if (!confirmingSwitch) return;
     setEndSignal((n) => n + 1);
-    switchTab(confirmingSwitch);
-    setConfirmingSwitch(null);
   };
+
+  const onHostEnded = (
+    record: PracticeSessionRecord | null,
+    settle: (final: PracticeSessionRecord | null) => boolean
+  ) => {
+    const target = confirmingSwitch ?? 'assessment';
+    if (!record) {
+      // The session had already finished on its own: nothing to rate here.
+      switchTab(target);
+      setConfirmingSwitch(null);
+      return;
+    }
+    setAfterEnd({ record, settle, target });
+  };
+
+  // Posts the record once (with ratings, or as it ended when final is null), then
+  // switches. endedBy stays 'abandoned' either way.
+  const finishAfterEnd = useCallback(
+    (final: PracticeSessionRecord | null) => {
+      if (!afterEnd) return;
+      afterEnd.settle(final);
+      switchTab(afterEnd.target);
+      setAfterEnd(null);
+      setConfirmingSwitch(null);
+    },
+    [afterEnd, switchTab]
+  );
+
+  // Hidden or closed while the ratings show: post it without them now, through
+  // the same slot, so it is not lost and never posted twice.
+  useEffect(() => {
+    if (!afterEnd) return;
+    const onHide = () => {
+      if (document.visibilityState === 'hidden') finishAfterEnd(null);
+    };
+    const onPageHide = () => finishAfterEnd(null);
+    document.addEventListener('visibilitychange', onHide);
+    window.addEventListener('pagehide', onPageHide);
+    return () => {
+      document.removeEventListener('visibilitychange', onHide);
+      window.removeEventListener('pagehide', onPageHide);
+    };
+  }, [afterEnd, finishAfterEnd]);
 
   if (!launch) return <div className="min-h-screen" style={{ background: C.pale }} />;
   const access = freshAirAccess(launch, tokenValid);
@@ -197,6 +248,7 @@ export default function FreshAirPage() {
       }
       onActiveChange={setSessionRunning}
       endSignal={endSignal}
+      onHostEnded={onHostEnded}
       {...(sharedStrap ? { sharedStrap } : {})}
     />
   );
@@ -217,9 +269,10 @@ export default function FreshAirPage() {
 
   // One armband connection, above both tabs, so switching never pairs again.
   return (
-    <StrapProvider simulate={launch.simulateStrap}>
+    <StrapProvider simulate={launch.simulateStrap} simulation={launch.simulation}>
       <FreshAirShell
         pill={pill}
+        compactPill={compactPacePill(launch.pace, launch.paceSource)}
         tabs={{ active: tab, onSelect: selectTab }}
         armband={<ArmbandPill onOpen={() => setArmbandOpen(true)} />}
       >
@@ -238,7 +291,19 @@ export default function FreshAirPage() {
           ) : null}
         </main>
         {confirmingSwitch ? (
-          <EndSessionDialog onKeep={() => setConfirmingSwitch(null)} onEnd={endAndSwitch} />
+          <EndSessionDialog
+            onKeep={() => setConfirmingSwitch(null)}
+            onEnd={endAndSwitch}
+            rating={
+              afterEnd
+                ? {
+                    onSave: (ratingsAfter, ratingNote) =>
+                      finishAfterEnd(withAfterRatings(afterEnd.record, ratingsAfter, ratingNote)),
+                    onSkip: () => finishAfterEnd(withAfterRatings(afterEnd.record, NO_RATINGS, '')),
+                  }
+                : null
+            }
+          />
         ) : null}
         {armbandOpen ? (
           <ArmbandSheet
