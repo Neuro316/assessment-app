@@ -368,7 +368,7 @@ export default function PacerSession({
         <div style={{ textAlign: 'center', padding: '24px 8px' }}>
           <p style={{ margin: 0, fontSize: 18, lineHeight: 1.55, color: C.indigo }}>{phase.instruction}</p>
           <p style={{ margin: '12px 0 0', fontSize: 14, lineHeight: 1.5, color: C.charcoal, opacity: 0.7 }}>
-            Release whenever you want to. Breathing again early is always the right call — there is no
+            Release whenever you want to. Breathing again early is always the right call, there is no
             time to beat.
           </p>
         </div>

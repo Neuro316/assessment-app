@@ -32,7 +32,9 @@ import type {
   SessionContext,
 } from './types';
 import type { PhaseEnd, PhaseStart } from './usePacerProgram';
-import { usePracticeStrap, type PracticeStrapState } from './usePracticeStrap';
+import { usePracticeStrap, type PracticeStrap, type PracticeStrapState } from './usePracticeStrap';
+import type { SharedStrap } from './StrapProvider';
+import { instrumentStrapState } from './strap-state';
 import { useSessionWakeLock } from './useSessionWakeLock';
 import { strapModeFor } from './types';
 
@@ -109,6 +111,20 @@ export interface PracticeInstrumentProps {
   // screen. Ignored when no session is running, and on the first render. Omit it
   // and sessions end only from inside the instrument.
   endSignal?: number;
+  // With endSignal: the host asks for the after-session ratings itself. The ended
+  // record (endedBy 'abandoned') is handed over unposted with settle; settle(final)
+  // posts final once through onRecordSession, and settle(null) posts the record as
+  // it ended. Until it is settled the record waits in the same slot the unmount
+  // flush empties, so it is never posted twice. record is null when no session was
+  // running. Omit it and endSignal posts the record at once, without ratings.
+  onHostEnded?: (
+    record: PracticeSessionRecord | null,
+    settle: (final: PracticeSessionRecord | null) => boolean
+  ) => void;
+  // A connection the host owns (useSharedStrap, under a StrapProvider), used in
+  // place of the instrument's own so it outlives this screen. Omit it and the
+  // instrument connects for itself, as it always has.
+  sharedStrap?: SharedStrap | null;
 }
 
 // An exercise chosen from the list, on its intro screen and not yet started.
@@ -129,6 +145,72 @@ const RATING_SCALES: { key: RatingScale; label: string }[] = [
   { key: 'presence', label: 'Presence' },
 ];
 const EMPTY_RATINGS: SessionRatings = { grounded: null, focused: null, energy: null, presence: null };
+
+// The after-session check-ins: the four scales and the optional line. The finished
+// screen shows them, and so can a host that ended the session itself (End and
+// switch), so both fill the same fields.
+export function AfterSessionRatings({
+  ratings,
+  onRate,
+  ratingNote,
+  onRatingNote,
+}: {
+  ratings: SessionRatings;
+  onRate: (ratings: SessionRatings) => void;
+  ratingNote: string;
+  onRatingNote: (ratingNote: string) => void;
+}) {
+  return (
+    <div data-after-ratings>
+      <div style={{ display: 'grid', gap: 12 }}>
+        {RATING_SCALES.map((sc) => (
+          <ScaleRow
+            key={sc.key}
+            label={sc.label}
+            value={ratings[sc.key]}
+            onChange={(v) => onRate({ ...ratings, [sc.key]: v })}
+          />
+        ))}
+      </div>
+      <input
+        id="np-practice-rating-note"
+        aria-label="Anything to add"
+        value={ratingNote}
+        onChange={(e) => onRatingNote(e.target.value)}
+        placeholder="Anything to add? (optional)"
+        style={{
+          width: '100%',
+          boxSizing: 'border-box',
+          marginTop: 10,
+          font: 'inherit',
+          fontSize: 13,
+          padding: '8px 10px',
+          borderRadius: 8,
+          border: `1px solid ${C.border}`,
+          color: C.charcoal,
+        }}
+      />
+    </div>
+  );
+}
+
+export const NO_RATINGS: SessionRatings = EMPTY_RATINGS;
+
+// The record as Done sends it: the after-session ratings and line filled in, null
+// when nothing was given.
+export function withAfterRatings(
+  record: PracticeSessionRecord,
+  ratingsAfter: SessionRatings,
+  ratingNote: string,
+  note: string | null = record.note ?? null
+): PracticeSessionRecord {
+  return {
+    ...record,
+    note,
+    ratingsAfter: Object.values(ratingsAfter).some((v) => v !== null) ? ratingsAfter : null,
+    ratingNote: ratingNote.trim() || null,
+  };
+}
 
 // One tap on a five-step track. Reads as a slider, works as five buttons.
 function ScaleRow({ label, value, onChange }: { label: string; value: number | null; onChange: (v: number) => void }) {
@@ -255,7 +337,7 @@ interface RunningSession extends Chosen {
 const CONTEXT_FRAMING: Record<SessionContext, string> = {
   seated: 'Find a comfortable seat where you can stay still for the whole session.',
   walking:
-    'Find a safe place to walk at an easy pace — away from traffic, water and anything you need to watch closely.',
+    'Find a safe place to walk at an easy pace, away from traffic, water and anything you need to watch closely.',
 };
 
 interface Finished {
@@ -269,7 +351,7 @@ function formatTime(ms: number): string {
 }
 
 const STRAP_LABEL: Record<PracticeStrapState, string> = {
-  unsupported: 'Bluetooth is not available in this browser — the pacer runs on its own.',
+  unsupported: 'Bluetooth is not available in this browser, the pacer runs on its own.',
   idle: 'Armband not connected',
   reconnecting: 'Reconnecting to your armband…',
   searching: 'Choose your armband in the dialog…',
@@ -418,9 +500,9 @@ function StrapBar({
           logoSrc ? <LogoSpinner src={logoSrc} /> : <Spinner />
         ) : null}
         <span>
-          {state === 'connected' && hr ? `${STRAP_LABEL.connected} — ${hr} bpm` : STRAP_LABEL[state]}
+          {state === 'connected' && hr ? `${STRAP_LABEL.connected} · ${hr} bpm` : STRAP_LABEL[state]}
           {state === 'connected' && battery !== null ? ` · battery ${battery}%` : ''}
-          {state === 'error' && error ? ` — ${error}` : ''}
+          {state === 'error' && error ? ` · ${error}` : ''}
         </span>
       </span>
       {canConnect ? (
@@ -437,7 +519,7 @@ function MetricLine({ label, value, unit }: { label: string; value: number | nul
     <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', fontSize: 14 }}>
       <span style={{ opacity: 0.65 }}>{label}</span>
       <span style={{ color: C.indigo, fontWeight: 600 }}>
-        {value === null ? '—' : `${value}${unit ? ` ${unit}` : ''}`}
+        {value === null ? 'Not recorded' : `${value}${unit ? ` ${unit}` : ''}`}
       </span>
     </div>
   );
@@ -461,6 +543,8 @@ export default function PracticeInstrument({
   simulateStrap = false,
   onActiveChange,
   endSignal,
+  onHostEnded,
+  sharedStrap,
 }: PracticeInstrumentProps) {
   const [chosen, setChosen] = useState<Chosen | null>(null);
   // Where the person is in the library: the purpose cards, or one purpose's list.
@@ -537,7 +621,24 @@ export default function PracticeInstrument({
     eventsRef.current.push({ t: Date.now(), type: 'strap-drop' });
   }, []);
 
-  const strap = usePracticeStrap({ onData, onDropped, simulate: simulateStrap });
+  // Always called, so hooks keep their order; with a shared connection it is never
+  // asked to connect and stays idle.
+  const internalStrap = usePracticeStrap({ onData, onDropped, simulate: simulateStrap });
+  // The shared connection hands this screen the same packets the internal one
+  // would, through the same onData and onDropped.
+  const subscribeShared = sharedStrap?.subscribe;
+  useEffect(() => subscribeShared?.({ onData, onDropped }), [subscribeShared, onData, onDropped]);
+  const strap: Omit<PracticeStrap, 'reconnectSilently'> = sharedStrap
+    ? {
+        state: instrumentStrapState(sharedStrap.state, sharedStrap.error),
+        deviceName: sharedStrap.deviceName,
+        latest: sharedStrap.latest,
+        battery: sharedStrap.battery,
+        error: sharedStrap.error,
+        connect: sharedStrap.connect,
+        disconnect: sharedStrap.disconnect,
+      }
+    : internalStrap;
 
   // Session clock, for display only.
   useEffect(() => {
@@ -659,13 +760,25 @@ export default function PracticeInstrument({
   // The host asked for the session to end: End early's path, then the record goes
   // over now rather than waiting on a finished screen nobody is looking at.
   const lastEndSignalRef = useRef(endSignal);
+  const onHostEndedRef = useRef(onHostEnded);
+  onHostEndedRef.current = onHostEnded;
   useEffect(() => {
     if (endSignal === lastEndSignalRef.current) return;
     lastEndSignalRef.current = endSignal;
-    if (!running) return;
+    const hostEnded = onHostEndedRef.current;
+    if (!running) {
+      hostEnded?.(null, () => false);
+      return;
+    }
     end('abandoned');
-    handOverPending(pendingRef, (record) => onRecordRef.current(record));
     setFinished(null);
+    if (!hostEnded) {
+      handOverPending(pendingRef, (record) => onRecordRef.current(record));
+      return;
+    }
+    // The host shows the ratings; the record stays in the slot until it settles.
+    const record = pendingRef.current;
+    hostEnded(record, (final) => handOverPending(pendingRef, (r) => onRecordRef.current(final ?? r)));
   }, [endSignal, running, end]);
 
   const container: CSSProperties = {
@@ -905,7 +1018,7 @@ export default function PracticeInstrument({
         >
           <h2 style={{ margin: '0 0 4px', fontSize: 20, color: C.indigo }}>{finished.exercise.title}</h2>
           <p style={{ margin: '0 0 16px', fontSize: 13, opacity: 0.6 }}>
-            Session complete — {formatTime(record.durationMs)}
+            Session complete · {formatTime(record.durationMs)}
           </p>
           {finished.exercise.kind === 'field' ? (
             <>
@@ -945,44 +1058,22 @@ export default function PracticeInstrument({
         <div style={{ borderRadius: 16, background: '#fff', border: `1px solid ${C.mist}`, padding: 20 }}>
           <div style={{ fontSize: 14, color: C.indigo, marginBottom: 4 }}>How do you feel right now?</div>
           <div style={{ fontSize: 11.5, color: C.text3, marginBottom: 14 }}>One tap each, 1 to 5, low to high. Same scales as before you started.</div>
-          <div style={{ display: 'grid', gap: 12 }}>
-            {RATING_SCALES.map((sc) => (
-              <ScaleRow
-                key={sc.key}
-                label={sc.label}
-                value={ratingsAfter[sc.key]}
-                onChange={(v) => setRatingsAfter((r) => ({ ...r, [sc.key]: v }))}
-              />
-            ))}
-          </div>
-          <input
-            id="np-practice-rating-note"
-            aria-label="Anything to add"
-            value={ratingNote}
-            onChange={(e) => setRatingNote(e.target.value)}
-            placeholder="Anything to add? (optional)"
-            style={{
-              width: '100%',
-              boxSizing: 'border-box',
-              marginTop: 10,
-              font: 'inherit',
-              fontSize: 13,
-              padding: '8px 10px',
-              borderRadius: 8,
-              border: `1px solid ${C.border}`,
-              color: C.charcoal,
-            }}
+          <AfterSessionRatings
+            ratings={ratingsAfter}
+            onRate={setRatingsAfter}
+            ratingNote={ratingNote}
+            onRatingNote={setRatingNote}
           />
         </div>
         <div style={{ display: 'flex', justifyContent: 'center' }}>
           <Button
             onClick={() => {
-              const out: PracticeSessionRecord = {
-                ...record,
-                note: finished.exercise.kind === 'field' ? note.trim() || null : record.note ?? null,
-                ratingsAfter: Object.values(ratingsAfter).some((v) => v !== null) ? ratingsAfter : null,
-                ratingNote: ratingNote.trim() || null,
-              };
+              const out = withAfterRatings(
+                record,
+                ratingsAfter,
+                ratingNote,
+                finished.exercise.kind === 'field' ? note.trim() || null : record.note ?? null
+              );
               pendingRef.current = null;
               onRecordSession(out);
               setFinished(null);

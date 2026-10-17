@@ -38,6 +38,9 @@ export interface ConnectOptions {
   // ~5s user-activation window that requestDevice() needs, so retrying it would
   // burn the gesture and get the picker refused again.
   skipKnownDevices?: boolean;
+  // Simulation only: while this returns true the simulated strap emits nothing. The
+  // assessment's &drop= test flag uses it; practice never passes it.
+  isMuted?: () => boolean;
 }
 
 export interface HRConnection {
@@ -373,6 +376,7 @@ export function connectSimulated(
   let prevRR = 830;
 
   const interval = setInterval(() => {
+    if (options.isMuted?.()) return;
     const noise = (Math.random() - 0.5) * 80;
     const respiratory = Math.sin(Date.now() / 4000) * 35;
     let rr = 830 + noise + respiratory + (prevRR - 830) * 0.3;

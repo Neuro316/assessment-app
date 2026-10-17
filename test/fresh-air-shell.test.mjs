@@ -113,7 +113,8 @@ test('the Assessment placeholder says what was agreed, with the button disabled'
 
 test('the practice screen is the same instrument in both branches, mounted once', () => {
   assert.equal((page.match(/<PracticeInstrument/g) || []).length, 1);
-  assert.equal((page.match(/\{instrument\}/g) || []).length, 2, 'flag off and the Practice tab');
+  assert.equal((page.match(/\{instrument\(\)\}/g) || []).length, 1, 'flag off');
+  assert.equal((page.match(/instrument\(strap\)/g) || []).length, 1, 'the Practice tab');
 });
 
 // ----- one greeting -----
@@ -165,13 +166,14 @@ test('End and switch posts the session exactly once, whatever comes after it', (
   assert.equal(handOverPending(slot, post), false);
   assert.equal(posted.length, 1);
   assert.equal(posted[0].endedBy, 'abandoned');
-  // The instrument takes End early's own path, then hands over, then leaves the finished screen.
+  // The instrument takes End early's own path and leaves the finished screen. Without
+  // onHostEnded it hands over at once; with it, the host settles the slot later.
   const instrument = readFileSync(new URL('../packages/practice/src/PracticeInstrument.tsx', import.meta.url), 'utf8');
   assert.match(
     instrument,
-    /if \(!running\) return;\s+end\('abandoned'\);\s+handOverPending\(pendingRef, \(record\) => onRecordRef\.current\(record\)\);\s+setFinished\(null\);/
+    /end\('abandoned'\);\s+setFinished\(null\);\s+if \(!hostEnded\) \{\s+handOverPending\(pendingRef, \(record\) => onRecordRef\.current\(record\)\);/
   );
-  assert.match(page, /setEndSignal\(\(n\) => n \+ 1\);\s+switchTab\(confirmingSwitch\);/);
+  assert.match(page, /const endAndSwitch = \(\) => \{\s+if \(!confirmingSwitch\) return;\s+setEndSignal\(\(n\) => n \+ 1\);\s+\};/);
 });
 
 test('the dialog: its words, aria-modal, Keep practicing focused and on Escape', () => {
@@ -181,8 +183,8 @@ test('the dialog: its words, aria-modal, Keep practicing focused and on Escape',
   assert.match(shell, />\s*Keep practicing\s*</);
   assert.match(shell, />\s*End and switch\s*</);
   assert.match(shell, /keepRef\.current\?\.focus\(\);/);
-  assert.match(shell, /if \(e\.key === 'Escape'\) \{\s+e\.preventDefault\(\);\s+onKeep\(\);/);
-  assert.match(page, /<EndSessionDialog onKeep=\{\(\) => setConfirmingSwitch\(null\)\} onEnd=\{endAndSwitch\} \/>/);
+  assert.match(shell, /if \(e\.key === 'Escape'\) \{\s+e\.preventDefault\(\);\s+if \(rating\) rating\.onSkip\(\);\s+else if \(!ending\) onKeep\(\);/);
+  assert.match(page, /<EndSessionDialog\s+onKeep=\{\(\) => setConfirmingSwitch\(null\)\}\s+onEnd=\{endAndSwitch\}/);
 });
 
 test('no em dashes in the shell or the page', () => {

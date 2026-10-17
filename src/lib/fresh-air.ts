@@ -21,6 +21,13 @@
 //                   NEXT_PUBLIC_FRESH_AIR_ASSESSMENT_TAB=1). Missing or anything else
 //                   opens Assessment.
 //   sim=1           test only: the armband is a simulated strap.
+//   Test only, and ignored without sim=1 (each a whole number of ms, at most 6 digits):
+//   sim_connect_ms=<n>   a connect takes n ms, so "connecting" shows
+//   sim_drop_at_ms=<n>   with sim_drop_for_ms=<m>: the first connection drops n ms
+//                        after it comes up and the strap is out of reach for m ms.
+//                        Within the provider's retry window it reconnects by itself;
+//                        past it, it stays lost. Either missing, no drop.
+//   sim_nobt=1           the browser reports no Web Bluetooth, as an iPhone's would
 //
 // There is no biometrics param. Armband or pacer alone is the person's choice per
 // session inside the app, as in the assessment.
@@ -36,6 +43,32 @@ export interface FreshAirLaunch {
   pace: number | null;
   paceSource: string | null;
   simulateStrap: boolean;
+  // Test only; null without sim=1.
+  simulation: FreshAirSimulation | null;
+}
+
+export interface FreshAirSimulation {
+  connectDelayMs: number | null;
+  dropAtMs: number | null;
+  dropForMs: number | null;
+  noBluetooth: boolean;
+}
+
+function simMs(raw: string | null): number | null {
+  return raw !== null && /^\d{1,6}$/.test(raw) ? Number(raw) : null;
+}
+
+export function launchSimulation(params: URLSearchParams): FreshAirSimulation | null {
+  if (params.get('sim') !== '1') return null;
+  const dropAtMs = simMs(params.get('sim_drop_at_ms'));
+  const dropForMs = simMs(params.get('sim_drop_for_ms'));
+  const dropping = dropAtMs !== null && dropForMs !== null && dropForMs > 0;
+  return {
+    connectDelayMs: simMs(params.get('sim_connect_ms')),
+    dropAtMs: dropping ? dropAtMs : null,
+    dropForMs: dropping ? dropForMs : null,
+    noBluetooth: params.get('sim_nobt') === '1',
+  };
 }
 
 // The six paces the assessment sweeps; a pace from anywhere else is not one of ours.
@@ -55,6 +88,57 @@ export function launchPaceSource(raw: string | null): string | null {
 export function pacePillText(pace: number | null, paceSource: string | null): string | null {
   if (pace === null) return null;
   return `Your pace ${pace} per min${paceSource === 'measured' ? ' · measured' : ''}`;
+}
+
+// The pace pill under 640px with the tabs on: short text, the full words as its label.
+export function compactPacePill(pace: number | null, paceSource: string | null): { text: string; ariaLabel: string } | null {
+  if (pace === null) return null;
+  return {
+    text: `Pace ${pace}`,
+    ariaLabel: `Your pace ${pace} per minute${paceSource === 'measured' ? ', measured' : ''}`,
+  };
+}
+
+// ----- the armband pill -----
+
+// What the header's armband pill says, by the shared connection's state. Under
+// 640px a connected pill shows only the rate, with the full words as its label.
+export type ArmbandPillState = 'unsupported' | 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'lost';
+
+export interface ArmbandPill {
+  text: string;
+  ariaLabel: string | null;
+  dot: boolean;
+}
+
+export function armbandPill(state: ArmbandPillState, bpm: number | null, narrow: boolean): ArmbandPill {
+  switch (state) {
+    case 'connected':
+      if (bpm === null) {
+        // Before the first beat arrives.
+        return narrow
+          ? { text: 'Connected', ariaLabel: 'Armband connected', dot: true }
+          : { text: 'Armband connected', ariaLabel: null, dot: true };
+      }
+      return narrow
+        ? { text: `${bpm} bpm`, ariaLabel: `Armband connected, ${bpm} beats per minute`, dot: true }
+        : { text: `Armband connected · ${bpm} bpm`, ariaLabel: null, dot: true };
+    case 'idle':
+      return narrow
+        ? { text: 'Connect', ariaLabel: 'Connect armband', dot: false }
+        : { text: 'Connect armband', ariaLabel: null, dot: false };
+    case 'connecting':
+    case 'reconnecting':
+      return narrow
+        ? { text: 'Connecting', ariaLabel: 'Connecting armband', dot: false }
+        : { text: 'Connecting armband', ariaLabel: null, dot: false };
+    case 'lost':
+      return narrow
+        ? { text: 'Reconnect', ariaLabel: 'Armband disconnected, tap to reconnect', dot: false }
+        : { text: 'Armband disconnected', ariaLabel: null, dot: false };
+    case 'unsupported':
+      return { text: 'Pacer only', ariaLabel: null, dot: false };
+  }
 }
 
 // ----- the shell's tabs -----
@@ -102,6 +186,7 @@ export function parseFreshAirLaunch(params: URLSearchParams): FreshAirLaunch {
     pace: launchPace(params.get('pace')),
     paceSource: launchPaceSource(params.get('pace_source')),
     simulateStrap: params.get('sim') === '1',
+    simulation: launchSimulation(params),
   };
 }
 
