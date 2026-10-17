@@ -73,8 +73,12 @@ export function ArmbandSheet({ onClose, onPracticeWithPacer }: { onClose: () => 
 
   useEffect(() => {
     const before = document.activeElement as HTMLElement | null;
-    panelRef.current?.querySelector<HTMLButtonElement>('button:not([disabled])[data-primary]')?.focus() ??
-      panelRef.current?.querySelector<HTMLButtonElement>('button:not([disabled])')?.focus();
+    // The sheet's main action when it has one, else the first button.
+    const panel = panelRef.current;
+    (
+      panel?.querySelector<HTMLButtonElement>('button:not([disabled])[data-primary]') ??
+      panel?.querySelector<HTMLButtonElement>('button:not([disabled])')
+    )?.focus();
     return () => before?.focus();
   }, []);
 

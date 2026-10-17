@@ -129,6 +129,12 @@ test('the pill is a 44px button that opens the sheet, with an aria-hidden green 
 
 test('the sheet: a modal dialog, Escape closes, Tab stays inside, bottom sheet under 640px', () => {
   assert.match(sheet, /role="dialog"\s+aria-modal="true"/);
+  // Focus opens on the main action (Connect, Practice with the pacer), else the first button.
+  // focus() returns undefined, so the fallback must pick the element, not chain the calls.
+  assert.match(
+    sheet,
+    /\(\s+panel\?\.querySelector<HTMLButtonElement>\('button:not\(\[disabled\]\)\[data-primary\]'\) \?\?\s+panel\?\.querySelector<HTMLButtonElement>\('button:not\(\[disabled\]\)'\)\s+\)\?\.focus\(\);/
+  );
   assert.match(sheet, /if \(e\.key === 'Escape'\) \{\s+e\.preventDefault\(\);\s+onClose\(\);/);
   assert.match(sheet, /focusable\[next\]\.focus\(\);/);
   assert.match(sheet, /className="items-end sm:items-center sm:p-4"/);
