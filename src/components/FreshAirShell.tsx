@@ -46,11 +46,14 @@ interface Tabs {
 export default function FreshAirShell({
   pill,
   tabs,
+  armband,
   background = U.page,
   children,
 }: {
   pill: string | null;
   tabs?: Tabs;
+  // Right of the pace pill: the armband pill, with the tabs only.
+  armband?: ReactNode;
   background?: string;
   children: ReactNode;
 }) {
@@ -127,22 +130,26 @@ export default function FreshAirShell({
             </div>
           ) : null}
 
-          {pill ? (
-            <span
-              data-pace-pill
-              style={{
-                marginLeft: 'auto',
-                background: U.tint,
-                color: U.dark,
-                fontSize: 13,
-                fontWeight: 500,
-                padding: '6px 12px',
-                borderRadius: 999,
-                whiteSpace: 'nowrap',
-              }}
-            >
-              {pill}
-            </span>
+          {pill || armband ? (
+            <div style={{ marginLeft: 'auto', display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
+              {pill ? (
+                <span
+                  data-pace-pill
+                  style={{
+                    background: U.tint,
+                    color: U.dark,
+                    fontSize: 13,
+                    fontWeight: 500,
+                    padding: '6px 12px',
+                    borderRadius: 999,
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {pill}
+                </span>
+              ) : null}
+              {armband}
+            </div>
           ) : null}
         </div>
       </header>

@@ -7,18 +7,22 @@
 //
 // It stores nothing. The record goes to the platform on Done and nowhere else.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 
 import {
   PracticeInstrument,
+  StrapProvider,
   canUseExercise,
   narrationManifest,
+  useSharedStrap,
   PRACTICE_EXERCISES,
   type PracticeExercise,
   type PracticePerson,
   type PracticeSessionRecord,
+  type SharedStrap,
 } from '@neuroprogeny/practice';
 
+import { ArmbandPill, ArmbandSheet } from '@/components/ArmbandSheet';
 import FreshAirShell, { EndSessionDialog, ShellCard, U, panelId, tabId } from '@/components/FreshAirShell';
 import GateScreen from '@/components/GateScreen';
 import { launchAgeBand, type AgeBand } from '@/lib/age-band';
@@ -86,6 +90,7 @@ export default function FreshAirPage() {
   // Bumped to have the instrument end the running session (End and switch).
   const [endSignal, setEndSignal] = useState(0);
   const [confirmingSwitch, setConfirmingSwitch] = useState<FreshAirTab | null>(null);
+  const [armbandOpen, setArmbandOpen] = useState(false);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -172,7 +177,9 @@ export default function FreshAirPage() {
     </p>
   );
 
-  const instrument = (
+  // With the tabs, the instrument reads the armband the shell owns; without them it
+  // is not given one and connects for itself, as it always has.
+  const instrument = (sharedStrap?: SharedStrap | null) => (
     <PracticeInstrument
       // The pace from the launch link, shown on the intro; without one, nothing. Never
       // null: null shows a "take the assessment" prompt this page has nowhere to send.
@@ -190,6 +197,7 @@ export default function FreshAirPage() {
       }
       onActiveChange={setSessionRunning}
       endSignal={endSignal}
+      {...(sharedStrap ? { sharedStrap } : {})}
     />
   );
 
@@ -201,33 +209,54 @@ export default function FreshAirPage() {
             {greeting}
             {narrationNote}
           </div>
-          {instrument}
+          {instrument()}
         </div>
       </FreshAirShell>
     );
   }
 
+  // One armband connection, above both tabs, so switching never pairs again.
   return (
-    <FreshAirShell pill={pill} tabs={{ active: tab, onSelect: selectTab }}>
-      <main className="px-4 sm:px-6" style={{ maxWidth: 1200, margin: '0 auto', paddingTop: 24, paddingBottom: 48, fontFamily: U.font }}>
-        {greeting ? <div style={{ marginBottom: 16 }}>{greeting}</div> : null}
-        {/* The instrument stays mounted behind the Assessment tab: unmounting it would
-            drop a session in progress and flush a finished one before Done. */}
-        <div role="tabpanel" id={panelId('practice')} aria-labelledby={tabId('practice')} hidden={tab !== 'practice'}>
-          {narrationNote ? <div style={{ marginBottom: 16 }}>{narrationNote}</div> : null}
-          {instrument}
-        </div>
-        {tab === 'assessment' ? (
-          <div role="tabpanel" id={panelId('assessment')} aria-labelledby={tabId('assessment')}>
-            <AssessmentPlaceholder />
+    <StrapProvider simulate={launch.simulateStrap}>
+      <FreshAirShell
+        pill={pill}
+        tabs={{ active: tab, onSelect: selectTab }}
+        armband={<ArmbandPill onOpen={() => setArmbandOpen(true)} />}
+      >
+        <main className="px-4 sm:px-6" style={{ maxWidth: 1200, margin: '0 auto', paddingTop: 24, paddingBottom: 48, fontFamily: U.font }}>
+          {greeting ? <div style={{ marginBottom: 16 }}>{greeting}</div> : null}
+          {/* The instrument stays mounted behind the Assessment tab: unmounting it would
+              drop a session in progress and flush a finished one before Done. */}
+          <div role="tabpanel" id={panelId('practice')} aria-labelledby={tabId('practice')} hidden={tab !== 'practice'}>
+            {narrationNote ? <div style={{ marginBottom: 16 }}>{narrationNote}</div> : null}
+            <WithSharedStrap>{(strap) => instrument(strap)}</WithSharedStrap>
           </div>
+          {tab === 'assessment' ? (
+            <div role="tabpanel" id={panelId('assessment')} aria-labelledby={tabId('assessment')}>
+              <AssessmentPlaceholder />
+            </div>
+          ) : null}
+        </main>
+        {confirmingSwitch ? (
+          <EndSessionDialog onKeep={() => setConfirmingSwitch(null)} onEnd={endAndSwitch} />
         ) : null}
-      </main>
-      {confirmingSwitch ? (
-        <EndSessionDialog onKeep={() => setConfirmingSwitch(null)} onEnd={endAndSwitch} />
-      ) : null}
-    </FreshAirShell>
+        {armbandOpen ? (
+          <ArmbandSheet
+            onClose={() => setArmbandOpen(false)}
+            onPracticeWithPacer={() => {
+              setArmbandOpen(false);
+              selectTab('practice');
+            }}
+          />
+        ) : null}
+      </FreshAirShell>
+    </StrapProvider>
   );
+}
+
+// Hands the StrapProvider's connection to a child that is built outside it.
+function WithSharedStrap({ children }: { children: (strap: SharedStrap | null) => ReactNode }) {
+  return <>{children(useSharedStrap())}</>;
 }
 
 // Stage 1 only: the sitting itself arrives in a later update.

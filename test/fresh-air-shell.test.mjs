@@ -113,7 +113,8 @@ test('the Assessment placeholder says what was agreed, with the button disabled'
 
 test('the practice screen is the same instrument in both branches, mounted once', () => {
   assert.equal((page.match(/<PracticeInstrument/g) || []).length, 1);
-  assert.equal((page.match(/\{instrument\}/g) || []).length, 2, 'flag off and the Practice tab');
+  assert.equal((page.match(/\{instrument\(\)\}/g) || []).length, 1, 'flag off');
+  assert.equal((page.match(/instrument\(strap\)/g) || []).length, 1, 'the Practice tab');
 });
 
 // ----- one greeting -----

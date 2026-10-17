@@ -57,6 +57,37 @@ export function pacePillText(pace: number | null, paceSource: string | null): st
   return `Your pace ${pace} per min${paceSource === 'measured' ? ' · measured' : ''}`;
 }
 
+// ----- the armband pill -----
+
+// What the header's armband pill says, by the shared connection's state. Under
+// 640px a connected pill shows only the rate, with the full words as its label.
+export type ArmbandPillState = 'unsupported' | 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'lost';
+
+export interface ArmbandPill {
+  text: string;
+  ariaLabel: string | null;
+  dot: boolean;
+}
+
+export function armbandPill(state: ArmbandPillState, bpm: number | null, narrow: boolean): ArmbandPill {
+  switch (state) {
+    case 'connected':
+      if (bpm === null) return { text: 'Armband connected', ariaLabel: null, dot: true };
+      return narrow
+        ? { text: `${bpm} bpm`, ariaLabel: `Armband connected, ${bpm} beats per minute`, dot: true }
+        : { text: `Armband connected · ${bpm} bpm`, ariaLabel: null, dot: true };
+    case 'idle':
+      return { text: 'Connect armband', ariaLabel: null, dot: false };
+    case 'connecting':
+    case 'reconnecting':
+      return { text: 'Connecting armband', ariaLabel: null, dot: false };
+    case 'lost':
+      return { text: 'Armband disconnected', ariaLabel: null, dot: false };
+    case 'unsupported':
+      return { text: 'Pacer only', ariaLabel: null, dot: false };
+  }
+}
+
 // ----- the shell's tabs -----
 
 // Read at build, like the other NEXT_PUBLIC_ values. Anything but "1" keeps the

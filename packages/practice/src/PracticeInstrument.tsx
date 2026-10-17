@@ -32,7 +32,9 @@ import type {
   SessionContext,
 } from './types';
 import type { PhaseEnd, PhaseStart } from './usePacerProgram';
-import { usePracticeStrap, type PracticeStrapState } from './usePracticeStrap';
+import { usePracticeStrap, type PracticeStrap, type PracticeStrapState } from './usePracticeStrap';
+import type { SharedStrap } from './StrapProvider';
+import { instrumentStrapState } from './strap-state';
 import { useSessionWakeLock } from './useSessionWakeLock';
 import { strapModeFor } from './types';
 
@@ -109,6 +111,10 @@ export interface PracticeInstrumentProps {
   // screen. Ignored when no session is running, and on the first render. Omit it
   // and sessions end only from inside the instrument.
   endSignal?: number;
+  // A connection the host owns (useSharedStrap, under a StrapProvider), used in
+  // place of the instrument's own so it outlives this screen. Omit it and the
+  // instrument connects for itself, as it always has.
+  sharedStrap?: SharedStrap | null;
 }
 
 // An exercise chosen from the list, on its intro screen and not yet started.
@@ -461,6 +467,7 @@ export default function PracticeInstrument({
   simulateStrap = false,
   onActiveChange,
   endSignal,
+  sharedStrap,
 }: PracticeInstrumentProps) {
   const [chosen, setChosen] = useState<Chosen | null>(null);
   // Where the person is in the library: the purpose cards, or one purpose's list.
@@ -537,7 +544,24 @@ export default function PracticeInstrument({
     eventsRef.current.push({ t: Date.now(), type: 'strap-drop' });
   }, []);
 
-  const strap = usePracticeStrap({ onData, onDropped, simulate: simulateStrap });
+  // Always called, so hooks keep their order; with a shared connection it is never
+  // asked to connect and stays idle.
+  const internalStrap = usePracticeStrap({ onData, onDropped, simulate: simulateStrap });
+  // The shared connection hands this screen the same packets the internal one
+  // would, through the same onData and onDropped.
+  const subscribeShared = sharedStrap?.subscribe;
+  useEffect(() => subscribeShared?.({ onData, onDropped }), [subscribeShared, onData, onDropped]);
+  const strap: PracticeStrap = sharedStrap
+    ? {
+        state: instrumentStrapState(sharedStrap.state, sharedStrap.error),
+        deviceName: sharedStrap.deviceName,
+        latest: sharedStrap.latest,
+        battery: sharedStrap.battery,
+        error: sharedStrap.error,
+        connect: sharedStrap.connect,
+        disconnect: sharedStrap.disconnect,
+      }
+    : internalStrap;
 
   // Session clock, for display only.
   useEffect(() => {

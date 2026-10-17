@@ -50,6 +50,9 @@ export interface UsePracticeStrapOptions {
 
 export interface PracticeStrap {
   state: PracticeStrapState;
+  // The connected strap's advertised name ("Simulated armband" for the fake one),
+  // or null before the first connection.
+  deviceName: string | null;
   latest: HRDataPoint | null;
   battery: number | null;
   error: string | null;
@@ -62,6 +65,7 @@ export function usePracticeStrap(options: UsePracticeStrapOptions = {}): Practic
   const [latest, setLatest] = useState<HRDataPoint | null>(null);
   const [battery, setBattery] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [deviceName, setDeviceName] = useState<string | null>(null);
 
   const connectionRef = useRef<HRConnection | null>(null);
   // Held so a later connect can go straight back to the same strap, no picker.
@@ -148,6 +152,7 @@ export function usePracticeStrap(options: UsePracticeStrapOptions = {}): Practic
 
       connectionRef.current = conn;
       if (conn.device) deviceRef.current = conn.device;
+      setDeviceName(conn.device ? conn.device.name ?? 'Armband' : 'Simulated armband');
       skipSilentRef.current = false;
       setBattery(conn.battery);
       setState('connected');
@@ -185,5 +190,5 @@ export function usePracticeStrap(options: UsePracticeStrapOptions = {}): Practic
     []
   );
 
-  return { state, latest, battery, error, connect, disconnect };
+  return { state, deviceName, latest, battery, error, connect, disconnect };
 }
