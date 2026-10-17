@@ -4,7 +4,7 @@
 // the header alone above whatever the page renders. University platform tokens,
 // not the assessment's.
 
-import type { KeyboardEvent, ReactNode } from 'react';
+import { useEffect, useRef, type KeyboardEvent, type ReactNode } from 'react';
 
 import { FRESH_AIR_TABS, type FreshAirTab } from '@/lib/fresh-air';
 
@@ -148,6 +148,99 @@ export default function FreshAirShell({
       </header>
 
       {children}
+    </div>
+  );
+}
+
+// Asked before a tab press would leave a running session. Keep practicing has the
+// focus and is what Escape does; Tab stays inside the dialog.
+export function EndSessionDialog({ onKeep, onEnd }: { onKeep: () => void; onEnd: () => void }) {
+  const keepRef = useRef<HTMLButtonElement>(null);
+  const endRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    const before = document.activeElement as HTMLElement | null;
+    keepRef.current?.focus();
+    return () => before?.focus();
+  }, []);
+
+  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      onKeep();
+      return;
+    }
+    if (e.key !== 'Tab') return;
+    e.preventDefault();
+    const order = [keepRef.current, endRef.current];
+    const i = order.indexOf(document.activeElement as HTMLButtonElement);
+    order[(i + (e.shiftKey ? order.length - 1 : 1)) % order.length]?.focus();
+  };
+
+  const button = {
+    minHeight: 44,
+    padding: '0 18px',
+    borderRadius: 8,
+    fontSize: 15,
+    fontWeight: 600,
+    fontFamily: 'inherit',
+    cursor: 'pointer',
+  };
+
+  return (
+    <div
+      style={{
+        position: 'fixed',
+        inset: 0,
+        background: 'rgba(17, 24, 39, 0.4)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: 16,
+        zIndex: 50,
+        fontFamily: U.font,
+      }}
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="fresh-air-end-title"
+        aria-describedby="fresh-air-end-body"
+        onKeyDown={onKeyDown}
+        style={{
+          width: '100%',
+          maxWidth: 400,
+          background: U.card,
+          borderRadius: 12,
+          boxShadow: '0 10px 30px rgba(0, 0, 0, 0.15)',
+          padding: 24,
+        }}
+      >
+        <h2 id="fresh-air-end-title" style={{ margin: 0, fontSize: 18, fontWeight: 600, color: U.dark }}>
+          End this session?
+        </h2>
+        <p id="fresh-air-end-body" style={{ margin: '8px 0 20px', fontSize: 15, lineHeight: 1.5, color: U.muted }}>
+          Your session is still running. Switching now ends it.
+        </p>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, justifyContent: 'flex-end' }}>
+          <button
+            ref={endRef}
+            type="button"
+            onClick={onEnd}
+            style={{ ...button, background: U.card, color: U.dark, border: `1px solid ${U.headerBorder}` }}
+          >
+            End and switch
+          </button>
+          <button
+            ref={keepRef}
+            type="button"
+            onClick={onKeep}
+            style={{ ...button, background: U.blue, color: '#ffffff', border: 'none' }}
+          >
+            Keep practicing
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

@@ -73,6 +73,20 @@ export function freshAirTab(params: URLSearchParams): FreshAirTab {
   return (FRESH_AIR_TABS as readonly string[]).includes(raw ?? '') ? (raw as FreshAirTab) : 'assessment';
 }
 
+// What pressing a tab does. Leaving Practice while a session runs asks first
+// ("End this session?"); everything else switches at once.
+export type TabPress = 'stay' | 'switch' | 'confirm';
+
+export function tabPress(current: FreshAirTab, next: FreshAirTab, sessionRunning: boolean): TabPress {
+  if (next === current) return 'stay';
+  return current === 'practice' && sessionRunning ? 'confirm' : 'switch';
+}
+
+// The greeting at the top of the content, when the launch carried a name.
+export function welcomeLine(name: string | null): string | null {
+  return name ? `Welcome back, ${name}` : null;
+}
+
 // The query string with tab set and every launch param kept.
 export function searchWithTab(search: string, tab: FreshAirTab): string {
   const params = new URLSearchParams(search);

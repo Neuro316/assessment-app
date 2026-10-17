@@ -19,7 +19,7 @@ import {
   type PracticeSessionRecord,
 } from '@neuroprogeny/practice';
 
-import FreshAirShell, { ShellCard, U, panelId, tabId } from '@/components/FreshAirShell';
+import FreshAirShell, { EndSessionDialog, ShellCard, U, panelId, tabId } from '@/components/FreshAirShell';
 import GateScreen from '@/components/GateScreen';
 import { launchAgeBand, type AgeBand } from '@/lib/age-band';
 import {
@@ -32,13 +32,14 @@ import {
   pacePillText,
   parseFreshAirLaunch,
   searchWithTab,
+  tabPress,
+  welcomeLine,
   type FreshAirLaunch,
   type FreshAirTab,
 } from '@/lib/fresh-air';
 import { PLATFORM_URL } from '@/lib/platform-url';
 
 const C = {
-  indigo: '#324C66',
   charcoal: '#393939',
   pale: '#F0F4F8',
 };
@@ -80,6 +81,11 @@ export default function FreshAirPage() {
   // null while /api/verify-launch is deciding.
   const [tokenValid, setTokenValid] = useState<boolean | null>(null);
   const [tab, setTab] = useState<FreshAirTab>('assessment');
+  // Told by the instrument. While a session runs, leaving Practice asks first.
+  const [sessionRunning, setSessionRunning] = useState(false);
+  // Bumped to have the instrument end the running session (End and switch).
+  const [endSignal, setEndSignal] = useState(0);
+  const [confirmingSwitch, setConfirmingSwitch] = useState<FreshAirTab | null>(null);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -127,10 +133,25 @@ export default function FreshAirPage() {
   );
 
   // The open tab lives in the URL next to the launch params, which all stay.
-  const selectTab = useCallback((next: FreshAirTab) => {
+  const switchTab = useCallback((next: FreshAirTab) => {
     setTab(next);
     window.history.replaceState(window.history.state, '', searchWithTab(window.location.search, next));
   }, []);
+
+  const selectTab = (next: FreshAirTab) => {
+    const press = tabPress(tab, next, sessionRunning);
+    if (press === 'switch') switchTab(next);
+    if (press === 'confirm') setConfirmingSwitch(next);
+  };
+
+  // The instrument ends the session as End early does and posts the record once,
+  // through onRecordSession, before the tab changes.
+  const endAndSwitch = () => {
+    if (!confirmingSwitch) return;
+    setEndSignal((n) => n + 1);
+    switchTab(confirmingSwitch);
+    setConfirmingSwitch(null);
+  };
 
   if (!launch) return <div className="min-h-screen" style={{ background: C.pale }} />;
   const access = freshAirAccess(launch, tokenValid);
@@ -138,6 +159,12 @@ export default function FreshAirPage() {
   if (access === 'checking') return <div className="min-h-screen" style={{ background: C.pale }} />;
 
   const pill = pacePillText(launch.pace, launch.paceSource);
+  const welcome = welcomeLine(launch.name);
+  const greeting = welcome ? (
+    <p data-greeting style={{ margin: 0, fontSize: 14, color: U.muted }}>
+      {welcome}
+    </p>
+  ) : null;
 
   const narrationNote = NARRATION_BASE ? null : (
     <p data-narration="unavailable" style={{ margin: '6px 0 0', fontSize: 13, opacity: 0.7 }}>
@@ -161,6 +188,8 @@ export default function FreshAirPage() {
       resolveNarration={
         NARRATION_BASE ? (id) => narrationUrl(NARRATION_BASE, ROLE_OF.get(id), id) : undefined
       }
+      onActiveChange={setSessionRunning}
+      endSignal={endSignal}
     />
   );
 
@@ -169,9 +198,7 @@ export default function FreshAirPage() {
       <FreshAirShell pill={pill} background={C.pale}>
         <div style={{ color: C.charcoal, padding: '32px 16px 48px' }}>
           <div style={{ maxWidth: 900, margin: '0 auto 20px' }}>
-            <h1 style={{ margin: 0, fontSize: 22, fontWeight: 600, color: C.indigo }}>
-              {launch.name ? `Fresh Air, ${launch.name}` : 'Fresh Air'}
-            </h1>
+            {greeting}
             {narrationNote}
           </div>
           {instrument}
@@ -183,6 +210,7 @@ export default function FreshAirPage() {
   return (
     <FreshAirShell pill={pill} tabs={{ active: tab, onSelect: selectTab }}>
       <main className="px-4 sm:px-6" style={{ maxWidth: 1200, margin: '0 auto', paddingTop: 24, paddingBottom: 48, fontFamily: U.font }}>
+        {greeting ? <div style={{ marginBottom: 16 }}>{greeting}</div> : null}
         {/* The instrument stays mounted behind the Assessment tab: unmounting it would
             drop a session in progress and flush a finished one before Done. */}
         <div role="tabpanel" id={panelId('practice')} aria-labelledby={tabId('practice')} hidden={tab !== 'practice'}>
@@ -195,6 +223,9 @@ export default function FreshAirPage() {
           </div>
         ) : null}
       </main>
+      {confirmingSwitch ? (
+        <EndSessionDialog onKeep={() => setConfirmingSwitch(null)} onEnd={endAndSwitch} />
+      ) : null}
     </FreshAirShell>
   );
 }

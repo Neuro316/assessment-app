@@ -13,8 +13,12 @@ import {
   launchPaceSource,
   pacePillText,
   parseFreshAirLaunch,
+  oncePerRecord,
   searchWithTab,
+  tabPress,
+  welcomeLine,
 } from '../src/lib/fresh-air.ts';
+import { handOverPending } from '../packages/practice/dist/index.js';
 
 const params = (q) => new URLSearchParams(q);
 const launch = (q) => parseFreshAirLaunch(params(q));
@@ -110,6 +114,75 @@ test('the Assessment placeholder says what was agreed, with the button disabled'
 test('the practice screen is the same instrument in both branches, mounted once', () => {
   assert.equal((page.match(/<PracticeInstrument/g) || []).length, 1);
   assert.equal((page.match(/\{instrument\}/g) || []).length, 2, 'flag off and the Practice tab');
+});
+
+// ----- one greeting -----
+
+const flagOff = page.slice(page.indexOf('if (!ASSESSMENT_TAB) {'), page.indexOf('tabs={{ active: tab'));
+const flagOn = page.slice(page.indexOf('tabs={{ active: tab'));
+
+test('the greeting is "Welcome back, {name}", and nothing without a name', () => {
+  assert.equal(welcomeLine(launch('name=Ana').name), 'Welcome back, Ana');
+  assert.equal(welcomeLine(launch('').name), null);
+  assert.equal(welcomeLine(launch('name=').name), null);
+  assert.match(page, /<p data-greeting style=\{\{ margin: 0, fontSize: 14, color: U\.muted \}\}>/);
+  assert.match(shell, /muted: '#6b7280'/);
+});
+
+test('one greeting on screen with the flag off, above the narration note', () => {
+  assert.equal((flagOff.match(/\{greeting\}/g) || []).length, 1);
+  assert.ok(flagOff.indexOf('{greeting}') < flagOff.indexOf('{narrationNote}'));
+  assert.equal(/<h1|Fresh Air, \$\{/.test(page), false, 'the old "Fresh Air, {name}" heading is gone');
+});
+
+test('one greeting on screen with the flag on, at the top of the content and outside the panels', () => {
+  assert.equal((flagOn.match(/\{greeting \?/g) || []).length, 1);
+  assert.ok(flagOn.indexOf('greeting ?') < flagOn.indexOf('role="tabpanel"'));
+  assert.equal(/<h1/.test(flagOn), false);
+  assert.equal((page.match(/greeting/g) || []).length, 5, 'declared once, used once per branch');
+});
+
+// ----- leaving a running session -----
+
+test('a tab press while a session runs asks first; idle, it switches at once', () => {
+  assert.equal(tabPress('practice', 'assessment', true), 'confirm');
+  assert.equal(tabPress('practice', 'assessment', false), 'switch');
+  assert.equal(tabPress('assessment', 'practice', false), 'switch');
+  assert.equal(tabPress('assessment', 'practice', true), 'switch', 'going to Practice never asks');
+  assert.equal(tabPress('practice', 'practice', true), 'stay');
+  assert.equal(tabPress('assessment', 'assessment', false), 'stay');
+  assert.match(page, /const press = tabPress\(tab, next, sessionRunning\);/);
+  assert.match(page, /onActiveChange=\{setSessionRunning\}/);
+});
+
+test('End and switch posts the session exactly once, whatever comes after it', () => {
+  const posted = [];
+  const post = oncePerRecord((record) => posted.push(record));
+  // end('abandoned') leaves the record in the slot; End and switch hands it over now.
+  const slot = { current: { exerciseId: 'B1', endedBy: 'abandoned' } };
+  assert.equal(handOverPending(slot, post), true);
+  // The unmount flush finds the slot empty, and the finished screen (and its Done) is gone.
+  assert.equal(handOverPending(slot, post), false);
+  assert.equal(posted.length, 1);
+  assert.equal(posted[0].endedBy, 'abandoned');
+  // The instrument takes End early's own path, then hands over, then leaves the finished screen.
+  const instrument = readFileSync(new URL('../packages/practice/src/PracticeInstrument.tsx', import.meta.url), 'utf8');
+  assert.match(
+    instrument,
+    /if \(!running\) return;\s+end\('abandoned'\);\s+handOverPending\(pendingRef, \(record\) => onRecordRef\.current\(record\)\);\s+setFinished\(null\);/
+  );
+  assert.match(page, /setEndSignal\(\(n\) => n \+ 1\);\s+switchTab\(confirmingSwitch\);/);
+});
+
+test('the dialog: its words, aria-modal, Keep practicing focused and on Escape', () => {
+  assert.match(shell, /role="dialog"\s+aria-modal="true"/);
+  assert.match(shell, />\s*End this session\?\s*</);
+  assert.match(shell, />\s*Your session is still running\. Switching now ends it\.\s*</);
+  assert.match(shell, />\s*Keep practicing\s*</);
+  assert.match(shell, />\s*End and switch\s*</);
+  assert.match(shell, /keepRef\.current\?\.focus\(\);/);
+  assert.match(shell, /if \(e\.key === 'Escape'\) \{\s+e\.preventDefault\(\);\s+onKeep\(\);/);
+  assert.match(page, /<EndSessionDialog onKeep=\{\(\) => setConfirmingSwitch\(null\)\} onEnd=\{endAndSwitch\} \/>/);
 });
 
 test('no em dashes in the shell or the page', () => {

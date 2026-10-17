@@ -18,6 +18,7 @@ export { rounds } from './pacer';
 export { withBookends } from './pacer';
 
 export { canUseExercise, strapModeFor } from './types';
+export { handOverPending } from './hand-over';
 
 // The full library (38 exercises across breathing, visualization and
 // mindfulness) and the purposes the library screen groups on.
